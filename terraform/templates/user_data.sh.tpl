@@ -38,7 +38,7 @@ chown -R codelexin:codelexin /data
 
 # ── Clone repo ─────────────────────────────────────────────────────────────────
 APP_DIR="/opt/codelexin"
-git clone https://github.com/YOUR_ORG/codelexin.git "$APP_DIR" || true
+git clone https://github.com/UllasSankhla/lexin.git "$APP_DIR" || true
 chown -R codelexin:codelexin "$APP_DIR"
 
 # ── Python virtual environments ────────────────────────────────────────────────

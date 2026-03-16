@@ -85,7 +85,7 @@ Pass the key in the `X-Customer-Key` header when calling `POST /api/v1/calls/ini
 |---|---|
 | View logs | `sudo journalctl -fu control-plane` / `data-plane` |
 | Restart a service | `sudo systemctl restart control-plane` |
-| Update app code | `cd /opt/codelexin && git pull && sudo systemctl restart control-plane data-plane` |
+| Update app code | `cd /opt/lexin && git pull && sudo systemctl restart control-plane data-plane` |
 | Renew TLS certs (auto) | `sudo certbot renew --dry-run` |
 | Check disk usage | `df -h /data` |
 | Manual EBS snapshot | AWS Console → EC2 → Volumes → Create Snapshot |
