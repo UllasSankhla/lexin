@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codelexin Admin</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --blue: #4F46E5;
+    --blue-light: #6366F1;
+    --blue-dark: #3730A3;
+    --green: #10B981;
+    --red: #EF4444;
+    --amber: #F59E0B;
+    --gray-50: #F9FAFB;
+    --gray-100: #F3F4F6;
+    --gray-200: #E5E7EB;
+    --gray-300: #D1D5DB;
+    --gray-400: #9CA3AF;
+    --gray-500: #6B7280;
+    --gray-600: #4B5563;
+    --gray-700: #374151;
+    --gray-800: #1F2937;
+    --gray-900: #111827;
+    --white: #ffffff;
+    --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,.1), 0 2px 4px -1px rgba(0,0,0,.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -2px rgba(0,0,0,.05);
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--gray-50); color: var(--gray-800); min-height: 100vh; }
+
+  /* ── HEADER ── */
+  header {
+    background: var(--white); border-bottom: 1px solid var(--gray-200);
+    padding: 0 24px; height: 60px; display: flex; align-items: center;
+    gap: 24px; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .header-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+  .header-logo svg { width: 32px; height: 32px; }
+  .header-logo span { font-size: 18px; font-weight: 700; color: var(--blue); }
+
+  /* ── NAV DROPDOWN ── */
+  .nav-wrap { position: relative; }
+  .nav-trigger {
+    display: flex; align-items: center; gap: 6px; padding: 8px 14px;
+    background: none; border: 1px solid var(--gray-200); border-radius: var(--radius);
+    cursor: pointer; font-size: 14px; font-weight: 500; color: var(--gray-700);
+    transition: background .15s;
+  }
+  .nav-trigger:hover { background: var(--gray-50); }
+  .nav-trigger .arrow { transition: transform .2s; }
+  .nav-trigger.open .arrow { transform: rotate(180deg); }
+  .nav-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0; min-width: 220px;
+    background: var(--white); border: 1px solid var(--gray-200); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg); overflow: hidden; display: none; z-index: 200;
+  }
+  .nav-dropdown.open { display: block; }
+  .nav-section-label {
+    padding: 8px 14px 4px; font-size: 11px; font-weight: 600; color: var(--gray-400);
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    cursor: pointer; font-size: 14px; color: var(--gray-700); transition: background .1s;
+  }
+  .nav-item:hover { background: var(--gray-50); }
+  .nav-item.active { background: #EEF2FF; color: var(--blue); font-weight: 500; }
+  .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .nav-divider { border: none; border-top: 1px solid var(--gray-100); margin: 4px 0; }
+
+  .header-page-title { font-size: 15px; font-weight: 600; color: var(--gray-700); }
+  .header-spacer { flex: 1; }
+  .header-settings-btn {
+    padding: 7px 14px; border: 1px solid var(--gray-200); border-radius: var(--radius);
+    background: none; cursor: pointer; font-size: 13px; color: var(--gray-600);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .header-settings-btn:hover { background: var(--gray-50); }
+
+  /* ── MAIN ── */
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 24px; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ── PAGE HEADER ── */
+  .page-header { margin-bottom: 24px; }
+  .page-header h1 { font-size: 22px; font-weight: 700; color: var(--gray-900); }
+  .page-header p { margin-top: 4px; font-size: 14px; color: var(--gray-500); }
+
+  /* ── STAT CARDS ── */
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
+  .stat-card {
+    background: var(--white); border-radius: var(--radius-lg); padding: 20px;
+    box-shadow: var(--shadow); border: 1px solid var(--gray-100);
+  }
+  .stat-label { font-size: 12px; font-weight: 600; color: var(--gray-500); text-transform: uppercase; letter-spacing: .05em; }
+  .stat-value { font-size: 32px; font-weight: 700; color: var(--gray-900); margin-top: 6px; line-height: 1; }
+  .stat-sub { font-size: 12px; color: var(--gray-400); margin-top: 4px; }
+  .stat-card.green .stat-value { color: var(--green); }
+  .stat-card.amber .stat-value { color: var(--amber); }
+  .stat-card.red .stat-value { color: var(--red); }
+
+  /* ── CARDS ── */
+  .card {
+    background: var(--white); border-radius: var(--radius-lg); box-shadow: var(--shadow);
+    border: 1px solid var(--gray-100); margin-bottom: 20px;
+  }
+  .card-header {
+    padding: 16px 20px; border-bottom: 1px solid var(--gray-100);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-title { font-size: 15px; font-weight: 600; color: var(--gray-800); }
+  .card-body { padding: 20px; }
+
+  /* ── TABLE ── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 600;
+    color: var(--gray-500); text-transform: uppercase; letter-spacing: .05em;
+    background: var(--gray-50); border-bottom: 1px solid var(--gray-200); }
+  td { padding: 12px 14px; border-bottom: 1px solid var(--gray-100); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--gray-50); }
+  .table-empty { padding: 40px; text-align: center; color: var(--gray-400); font-size: 14px; }
+
+  /* ── BADGES ── */
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+    border-radius: 99px; font-size: 11px; font-weight: 600; text-transform: capitalize;
+  }
+  .badge-green { background: #D1FAE5; color: #065F46; }
+  .badge-red { background: #FEE2E2; color: #991B1B; }
+  .badge-amber { background: #FEF3C7; color: #92400E; }
+  .badge-blue { background: #EEF2FF; color: #3730A3; }
+  .badge-gray { background: var(--gray-100); color: var(--gray-600); }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+    border-radius: var(--radius); font-size: 14px; font-weight: 500; cursor: pointer;
+    border: none; transition: all .15s; white-space: nowrap;
+  }
+  .btn-primary { background: var(--blue); color: var(--white); }
+  .btn-primary:hover { background: var(--blue-dark); }
+  .btn-secondary { background: var(--white); color: var(--gray-700); border: 1px solid var(--gray-200); }
+  .btn-secondary:hover { background: var(--gray-50); }
+  .btn-danger { background: var(--white); color: var(--red); border: 1px solid #FECACA; }
+  .btn-danger:hover { background: #FEF2F2; }
+  .btn-success { background: var(--green); color: var(--white); }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ── FORM ── */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-grid.single { grid-template-columns: 1fr; }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group.span2 { grid-column: span 2; }
+  label { font-size: 13px; font-weight: 500; color: var(--gray-700); }
+  .label-hint { font-size: 12px; color: var(--gray-400); font-weight: 400; margin-left: 4px; }
+  input[type=text], input[type=url], input[type=number], input[type=email],
+  input[type=password], select, textarea {
+    padding: 9px 12px; border: 1px solid var(--gray-300); border-radius: var(--radius);
+    font-size: 14px; color: var(--gray-800); background: var(--white);
+    transition: border-color .15s, box-shadow .15s; outline: none; width: 100%;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--blue); box-shadow: 0 0 0 3px rgba(79,70,229,.1);
+  }
+  textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+  .form-actions { display: flex; gap: 10px; margin-top: 20px; }
+
+  /* ── TOGGLE ── */
+  .toggle-wrap { display: flex; align-items: center; gap: 8px; }
+  .toggle {
+    position: relative; width: 40px; height: 22px; display: inline-block; cursor: pointer;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute; inset: 0; background: var(--gray-300); border-radius: 99px;
+    transition: background .2s;
+  }
+  .toggle-slider::before {
+    content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+    background: var(--white); border-radius: 50%; transition: transform .2s;
+  }
+  .toggle input:checked + .toggle-slider { background: var(--blue); }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--white); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+    width: 100%; max-width: 580px; max-height: 90vh; overflow-y: auto;
+    transform: translateY(12px); transition: transform .2s;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal-header {
+    padding: 18px 20px; border-bottom: 1px solid var(--gray-100);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .modal-title { font-size: 16px; font-weight: 600; color: var(--gray-900); }
+  .modal-close {
+    background: none; border: none; cursor: pointer; color: var(--gray-400);
+    font-size: 20px; line-height: 1; padding: 2px;
+  }
+  .modal-close:hover { color: var(--gray-700); }
+  .modal-body { padding: 20px; }
+  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--gray-100); display: flex; gap: 10px; justify-content: flex-end; }
+
+  /* ── CALL DETAIL ── */
+  .call-transcript {
+    background: var(--gray-50); border-radius: var(--radius); padding: 14px;
+    font-size: 13px; color: var(--gray-700); white-space: pre-wrap; font-family: monospace;
+    max-height: 360px; overflow-y: auto; border: 1px solid var(--gray-200);
+  }
+  .call-summary-box {
+    background: #EEF2FF; border-radius: var(--radius); padding: 14px;
+    font-size: 14px; color: var(--gray-700); border-left: 3px solid var(--blue);
+  }
+  .analytics-table td:last-child { font-variant-numeric: tabular-nums; }
+
+  /* ── TOAST ── */
+  .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    background: var(--gray-900); color: var(--white); padding: 12px 16px;
+    border-radius: var(--radius); font-size: 14px; box-shadow: var(--shadow-lg);
+    display: flex; align-items: center; gap: 8px; min-width: 280px;
+    animation: slideIn .2s ease; max-width: 380px;
+  }
+  .toast.success { background: #065F46; }
+  .toast.error { background: #991B1B; }
+  .toast.warning { background: #92400E; }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  /* ── SEARCH BAR ── */
+  .search-bar {
+    display: flex; gap: 10px; margin-bottom: 16px; align-items: center; flex-wrap: wrap;
+  }
+  .search-input { flex: 1; min-width: 200px; }
+
+  /* ── FILE UPLOAD ── */
+  .upload-zone {
+    border: 2px dashed var(--gray-300); border-radius: var(--radius-lg); padding: 32px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--blue); background: #EEF2FF; }
+  .upload-zone p { font-size: 14px; color: var(--gray-500); margin-top: 8px; }
+  .upload-zone strong { color: var(--blue); }
+
+  /* ── SECTION DETAIL ── */
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .detail-item label { font-size: 11px; font-weight: 600; color: var(--gray-400); text-transform: uppercase; }
+  .detail-item .detail-value { font-size: 14px; color: var(--gray-800); margin-top: 2px; word-break: break-all; }
+
+  /* ── SETTINGS PANEL ── */
+  .settings-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 500;
+    display: none;
+  }
+  .settings-overlay.open { display: block; }
+  .settings-panel {
+    position: fixed; top: 0; right: 0; width: 360px; height: 100vh;
+    background: var(--white); box-shadow: var(--shadow-lg); z-index: 501;
+    transform: translateX(100%); transition: transform .25s ease;
+    display: flex; flex-direction: column;
+  }
+  .settings-panel.open { transform: translateX(0); }
+  .settings-panel-header { padding: 18px 20px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; justify-content: space-between; }
+  .settings-panel-body { padding: 20px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+  .settings-panel-footer { padding: 14px 20px; border-top: 1px solid var(--gray-100); }
+
+  /* ── LOADING ── */
+  .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--gray-200); border-top-color: var(--blue); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-row td { text-align: center; padding: 40px; color: var(--gray-400); }
+
+  /* ── PARAM REORDER ── */
+  .drag-handle { cursor: grab; color: var(--gray-300); padding: 2px 6px; font-size: 18px; }
+  .drag-handle:active { cursor: grabbing; }
+  tr.dragging { opacity: .5; background: #EEF2FF !important; }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 680px) {
+    .form-grid { grid-template-columns: 1fr; }
+    .form-group.span2 { grid-column: span 1; }
+    .detail-grid { grid-template-columns: 1fr; }
+    main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header>
+  <a class="header-logo" href="#">
+    <svg viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="8" fill="#4F46E5"/>
+      <path d="M8 22 C8 22 12 10 16 10 C20 10 24 22 24 22" stroke="white" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <circle cx="16" cy="10" r="2" fill="white"/>
+    </svg>
+    <span>Codelexin</span>
+  </a>
+
+  <div class="nav-wrap">
+    <button class="nav-trigger" id="navTrigger" onclick="toggleNav()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      <span id="navLabel">Dashboard</span>
+      <svg class="arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="nav-dropdown" id="navDropdown">
+      <div class="nav-section-label">Overview</div>
+      <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </div>
+      <div class="nav-item" data-page="calls" onclick="navigate('calls')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81 19.79 19.79 0 01.01 1.18 2 2 0 012 .01h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 14.92z"/></svg>
+        Calls &amp; Transcripts
+      </div>
+      <hr class="nav-divider">
+      <div class="nav-section-label">Configuration</div>
+      <div class="nav-item" data-page="assistant" onclick="navigate('assistant')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        AI Assistant
+      </div>
+      <div class="nav-item" data-page="parameters" onclick="navigate('parameters')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Info to Collect
+      </div>
+      <div class="nav-item" data-page="faqs" onclick="navigate('faqs')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        FAQs
+      </div>
+      <div class="nav-item" data-page="context" onclick="navigate('context')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Knowledge Files
+      </div>
+      <div class="nav-item" data-page="spellrules" onclick="navigate('spellrules')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+        Name Corrections
+      </div>
+      <div class="nav-item" data-page="webhooks" onclick="navigate('webhooks')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        Notifications
+      </div>
+    </div>
+  </div>
+
+  <span class="header-page-title" id="headerTitle">Dashboard</span>
+  <div class="header-spacer"></div>
+  <button class="header-settings-btn" onclick="openSettings()">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    Settings
+  </button>
+</header>
+
+<!-- ── MAIN ── -->
+<main>
+
+  <!-- DASHBOARD -->
+  <section class="page active" id="page-dashboard">
+    <div class="page-header">
+      <h1>Dashboard</h1>
+      <p>Live overview of all call activity</p>
+    </div>
+    <div class="stat-grid" id="statsGrid">
+      <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="stat-total">—</div></div>
+      <div class="stat-card green"><div class="stat-label">Completed Today</div><div class="stat-value" id="stat-today">—</div></div>
+      <div class="stat-card"><div class="stat-label">Completion Rate</div><div class="stat-value" id="stat-rate">—</div><div class="stat-sub">of all calls</div></div>
+      <div class="stat-card amber"><div class="stat-label">Avg Call Length</div><div class="stat-value" id="stat-avg">—</div><div class="stat-sub">minutes</div></div>
+      <div class="stat-card red"><div class="stat-label">Errors</div><div class="stat-value" id="stat-errors">—</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Recent Calls</span>
+        <button class="btn btn-sm btn-secondary" onclick="navigate('calls')">View All</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Caller</th><th>Status</th><th>Duration</th><th>Date</th><th>Summary</th></tr></thead>
+          <tbody id="recentCallsBody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CALLS -->
+  <section class="page" id="page-calls">
+    <div class="page-header">
+      <h1>Calls &amp; Transcripts</h1>
+      <p>View call history, listen to transcripts, and review AI summaries</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">All Calls</span>
+      </div>
+      <div class="card-body" style="padding-bottom:0">
+        <div class="search-bar">
+          <input type="text" class="search-input" id="callSearch" placeholder="Search by caller name…" oninput="debounceSearch()">
+          <select id="callStateFilter" onchange="loadCalls()">
+            <option value="">All Statuses</option>
+            <option value="done">Completed</option>
+            <option value="active">Active</option>
+            <option value="error">Error</option>
+            <option value="connecting">Connecting</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="loadCalls()">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Caller</th><th>Status</th><th>Duration</th><th>Date</th><th>Summary</th><th></th></tr></thead>
+          <tbody id="callsBody"><tr class="loading-row"><td colspan="6"><span class="spinner"></span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ASSISTANT -->
+  <section class="page" id="page-assistant">
+    <div class="page-header">
+      <h1>AI Assistant Setup</h1>
+      <p>Configure how your AI receptionist sounds, behaves, and introduces itself</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Assistant Personality</span></div>
+      <div class="card-body">
+        <form id="assistantForm" onsubmit="saveAssistant(event)">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Assistant Name <span class="label-hint">What callers will hear</span></label>
+              <input type="text" id="aName" placeholder="e.g. Aria" required>
+            </div>
+            <div class="form-group">
+              <label>Voice <span class="label-hint">How the assistant sounds</span></label>
+              <select id="aVoice">
+                <option value="aura-2-thalia-en">Thalia (warm, female)</option>
+                <option value="aura-2-luna-en">Luna (professional, female)</option>
+                <option value="aura-2-stella-en">Stella (friendly, female)</option>
+                <option value="aura-2-athena-en">Athena (clear, female)</option>
+                <option value="aura-2-orion-en">Orion (deep, male)</option>
+                <option value="aura-2-arcas-en">Arcas (natural, male)</option>
+                <option value="aura-2-perseus-en">Perseus (confident, male)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Personality Style</label>
+              <select id="aNature">
+                <option value="friendly">Friendly &amp; Warm</option>
+                <option value="professional">Professional &amp; Formal</option>
+                <option value="concise">Concise &amp; Efficient</option>
+                <option value="empathetic">Empathetic &amp; Caring</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Language</label>
+              <select id="aLanguage">
+                <option value="en-US">English (US)</option>
+                <option value="en-GB">English (UK)</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+              </select>
+            </div>
+            <div class="form-group span2">
+              <label>Greeting Message <span class="label-hint">First thing the assistant says</span></label>
+              <textarea id="aGreeting" rows="2" placeholder="Hello! This is Aria. How can I help you today?" required></textarea>
+            </div>
+            <div class="form-group span2">
+              <label>System Instructions <span class="label-hint">Detailed behavior instructions for the AI</span></label>
+              <textarea id="aPrompt" rows="6" placeholder="You are a helpful assistant for…" required style="min-height:120px"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Max Call Duration <span class="label-hint">in minutes</span></label>
+              <input type="number" id="aMaxDuration" min="1" max="60" placeholder="10">
+            </div>
+            <div class="form-group">
+              <label>Silence Timeout <span class="label-hint">seconds before ending</span></label>
+              <input type="number" id="aSilence" min="3" max="60" placeholder="10">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="assistantSaveBtn">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- PARAMETERS -->
+  <section class="page" id="page-parameters">
+    <div class="page-header">
+      <h1>Info to Collect</h1>
+      <p>Define what information the assistant should gather from each caller (e.g. name, phone, appointment date)</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Collection Fields</span>
+        <button class="btn btn-primary btn-sm" onclick="openParamModal()">+ Add Field</button>
+      </div>
+      <div class="table-wrap">
+        <table id="paramTable">
+          <thead><tr><th style="width:30px"></th><th>Field Name</th><th>Type</th><th>Required</th><th>Order</th><th></th></tr></thead>
+          <tbody id="paramBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQS -->
+  <section class="page" id="page-faqs">
+    <div class="page-header">
+      <h1>FAQs</h1>
+      <p>Common questions and answers the assistant can recite to callers</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Question &amp; Answer Pairs</span>
+        <button class="btn btn-primary btn-sm" onclick="openFaqModal()">+ Add FAQ</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Question</th><th>Category</th><th>Active</th><th></th></tr></thead>
+          <tbody id="faqBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTEXT FILES -->
+  <section class="page" id="page-context">
+    <div class="page-header">
+      <h1>Knowledge Files</h1>
+      <p>Upload documents the AI uses as background knowledge (e.g. clinic hours, services, policies)</p>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">Upload New File</span></div>
+      <div class="card-body">
+        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()"
+          ondragover="event.preventDefault();this.classList.add('drag')"
+          ondragleave="this.classList.remove('drag')"
+          ondrop="handleFileDrop(event)">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p><strong>Click to upload</strong> or drag and drop</p>
+          <p style="font-size:12px;margin-top:4px">PDF, TXT, DOCX, CSV — up to 10MB</p>
+        </div>
+        <input type="file" id="fileInput" style="display:none" onchange="uploadContextFile(this.files[0])">
+        <div style="margin-top:12px">
+          <label>Description <span class="label-hint">(optional)</span></label>
+          <input type="text" id="fileDescription" placeholder="e.g. Office hours and location" style="margin-top:5px">
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Uploaded Files</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>File Name</th><th>Description</th><th>Size</th><th>Active</th><th></th></tr></thead>
+          <tbody id="contextBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- SPELL RULES -->
+  <section class="page" id="page-spellrules">
+    <div class="page-header">
+      <h1>Name Corrections</h1>
+      <p>Fix common speech-to-text mistakes — e.g. ensure "Dr. Smith" is never transcribed as "dr smith"</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Correction Rules</span>
+        <button class="btn btn-primary btn-sm" onclick="openSpellModal()">+ Add Rule</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Heard As</th><th>Correct To</th><th>Active</th><th></th></tr></thead>
+          <tbody id="spellBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- WEBHOOKS -->
+  <section class="page" id="page-webhooks">
+    <div class="page-header">
+      <h1>Notifications</h1>
+      <p>Send call data to external systems (e.g. your CRM or scheduling software) when a call completes</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Webhook Endpoints</span>
+        <button class="btn btn-primary btn-sm" onclick="openWebhookModal()">+ Add Webhook</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>URL</th><th>Events</th><th>Active</th><th></th></tr></thead>
+          <tbody id="webhookBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── MODALS ── -->
+
+<!-- Call Detail Modal -->
+<div class="modal-overlay" id="callModal">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <span class="modal-title" id="callModalTitle">Call Details</span>
+      <button class="modal-close" onclick="closeModal('callModal')">×</button>
+    </div>
+    <div class="modal-body" id="callModalBody"></div>
+    <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('callModal')">Close</button></div>
+  </div>
+</div>
+
+<!-- Parameter Modal -->
+<div class="modal-overlay" id="paramModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="paramModalTitle">Add Collection Field</span>
+      <button class="modal-close" onclick="closeModal('paramModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="paramForm" onsubmit="saveParam(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Field Name <span class="label-hint">e.g. client_name</span></label>
+            <input type="text" id="pName" placeholder="lowercase_snake_case" required pattern="[a-z0-9_]+" title="Lowercase letters, numbers and underscores only">
+          </div>
+          <div class="form-group">
+            <label>Display Label <span class="label-hint">Shown to callers</span></label>
+            <input type="text" id="pLabel" placeholder="e.g. Client Name" required>
+          </div>
+          <div class="form-group">
+            <label>Data Type</label>
+            <select id="pType">
+              <option value="text">Text</option>
+              <option value="phone">Phone Number</option>
+              <option value="email">Email Address</option>
+              <option value="date">Date</option>
+              <option value="number">Number</option>
+              <option value="address">Address</option>
+              <option value="insurance">Insurance</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Collection Order <span class="label-hint">Lower = collected first</span></label>
+            <input type="number" id="pOrder" value="0" min="0">
+          </div>
+          <div class="form-group span2">
+            <label>Extraction Hints <span class="label-hint">Optional phrases to help AI detect this (comma-separated)</span></label>
+            <input type="text" id="pHints" placeholder="e.g. my name is, I am called">
+          </div>
+          <div class="form-group span2">
+            <label>Validation Error Message <span class="label-hint">Shown when value is invalid</span></label>
+            <input type="text" id="pValMsg" placeholder="e.g. Please provide a valid phone number">
+          </div>
+          <div class="form-group span2">
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" id="pRequired" checked><span class="toggle-slider"></span></label>
+              <span style="font-size:14px;font-weight:500;color:var(--gray-700)">Required field</span>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('paramModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('paramForm').requestSubmit()">Save Field</button>
+    </div>
+  </div>
+</div>
+
+<!-- FAQ Modal -->
+<div class="modal-overlay" id="faqModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="faqModalTitle">Add FAQ</span>
+      <button class="modal-close" onclick="closeModal('faqModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="faqForm" onsubmit="saveFaq(event)">
+        <div class="form-grid single">
+          <div class="form-group">
+            <label>Question</label>
+            <input type="text" id="fQuestion" placeholder="e.g. What are your office hours?" required>
+          </div>
+          <div class="form-group">
+            <label>Answer</label>
+            <textarea id="fAnswer" rows="3" placeholder="e.g. We are open Monday to Friday, 9am to 5pm." required></textarea>
+          </div>
+          <div class="form-group">
+            <label>Category <span class="label-hint">(optional grouping)</span></label>
+            <input type="text" id="fCategory" placeholder="e.g. Hours, Services, Insurance">
+          </div>
+          <div class="form-group">
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" id="fEnabled" checked><span class="toggle-slider"></span></label>
+              <span style="font-size:14px;color:var(--gray-700)">Active</span>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('faqModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('faqForm').requestSubmit()">Save FAQ</button>
+    </div>
+  </div>
+</div>
+
+<!-- Spell Rule Modal -->
+<div class="modal-overlay" id="spellModal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <span class="modal-title">Add Correction Rule</span>
+      <button class="modal-close" onclick="closeModal('spellModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="spellForm" onsubmit="saveSpell(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Heard As (wrong)</label>
+            <input type="text" id="sWrong" placeholder="e.g. dr smith" required>
+          </div>
+          <div class="form-group">
+            <label>Correct To</label>
+            <input type="text" id="sCorrect" placeholder="e.g. Dr. Smith" required>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('spellModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('spellForm').requestSubmit()">Save Rule</button>
+    </div>
+  </div>
+</div>
+
+<!-- Webhook Modal -->
+<div class="modal-overlay" id="webhookModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="webhookModalTitle">Add Notification Webhook</span>
+      <button class="modal-close" onclick="closeModal('webhookModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="webhookForm" onsubmit="saveWebhook(event)">
+        <div class="form-grid">
+          <div class="form-group span2">
+            <label>Name <span class="label-hint">e.g. CRM Notification</span></label>
+            <input type="text" id="wName" required placeholder="e.g. Send to Salesforce">
+          </div>
+          <div class="form-group span2">
+            <label>Webhook URL</label>
+            <input type="url" id="wUrl" required placeholder="https://your-service.com/webhook">
+          </div>
+          <div class="form-group">
+            <label>Secret Header Name <span class="label-hint">(optional)</span></label>
+            <input type="text" id="wSecretHeader" placeholder="e.g. X-Secret">
+          </div>
+          <div class="form-group">
+            <label>Secret Value <span class="label-hint">(optional)</span></label>
+            <input type="password" id="wSecretValue" placeholder="Your secret token">
+          </div>
+          <div class="form-group">
+            <label>Timeout (seconds)</label>
+            <input type="number" id="wTimeout" value="10" min="1" max="60">
+          </div>
+          <div class="form-group">
+            <label>Retries on failure</label>
+            <input type="number" id="wRetry" value="3" min="0" max="10">
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('webhookModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('webhookForm').requestSubmit()">Save Webhook</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Panel -->
+<div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>
+<div class="settings-panel" id="settingsPanel">
+  <div class="settings-panel-header">
+    <span style="font-size:15px;font-weight:600">Connection Settings</span>
+    <button class="modal-close" onclick="closeSettings()">×</button>
+  </div>
+  <div class="settings-panel-body">
+    <div class="form-group">
+      <label>Control Plane URL</label>
+      <input type="text" id="settingsCpUrl" placeholder="http://localhost:8000">
+      <span style="font-size:12px;color:var(--gray-400);margin-top:3px">Admin configuration service</span>
+    </div>
+    <div class="form-group">
+      <label>Data Plane URL</label>
+      <input type="text" id="settingsDpUrl" placeholder="http://localhost:8001">
+      <span style="font-size:12px;color:var(--gray-400);margin-top:3px">Call recording service</span>
+    </div>
+    <div class="form-group">
+      <label>API Key <span class="label-hint">(leave blank in development)</span></label>
+      <input type="password" id="settingsApiKey" placeholder="Optional">
+    </div>
+    <div id="settingsStatus" style="font-size:13px;color:var(--gray-500)"></div>
+  </div>
+  <div class="settings-panel-footer">
+    <button class="btn btn-primary" style="width:100%" onclick="saveSettings()">Save &amp; Reconnect</button>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────────────────
+let CP = localStorage.getItem('cp_url') || 'http://localhost:8000';
+let DP = localStorage.getItem('dp_url') || 'http://localhost:8001';
+let API_KEY = localStorage.getItem('api_key') || '';
+
+// ── SETTINGS ────────────────────────────────────────────────────────────────
+function openSettings() {
+  document.getElementById('settingsCpUrl').value = CP;
+  document.getElementById('settingsDpUrl').value = DP;
+  document.getElementById('settingsApiKey').value = API_KEY;
+  document.getElementById('settingsOverlay').classList.add('open');
+  document.getElementById('settingsPanel').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settingsOverlay').classList.remove('open');
+  document.getElementById('settingsPanel').classList.remove('open');
+}
+function saveSettings() {
+  CP = document.getElementById('settingsCpUrl').value.replace(/\/$/, '') || 'http://localhost:8000';
+  DP = document.getElementById('settingsDpUrl').value.replace(/\/$/, '') || 'http://localhost:8001';
+  API_KEY = document.getElementById('settingsApiKey').value;
+  localStorage.setItem('cp_url', CP);
+  localStorage.setItem('dp_url', DP);
+  localStorage.setItem('api_key', API_KEY);
+  closeSettings();
+  toast('Settings saved', 'success');
+  loadCurrentPage();
+}
+
+// ── NAV ──────────────────────────────────────────────────────────────────────
+const PAGE_TITLES = {
+  dashboard: 'Dashboard', calls: 'Calls & Transcripts', assistant: 'AI Assistant',
+  parameters: 'Info to Collect', faqs: 'FAQs', context: 'Knowledge Files',
+  spellrules: 'Name Corrections', webhooks: 'Notifications'
+};
+let currentPage = 'dashboard';
+
+function toggleNav() {
+  document.getElementById('navTrigger').classList.toggle('open');
+  document.getElementById('navDropdown').classList.toggle('open');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.nav-wrap')) {
+    document.getElementById('navTrigger').classList.remove('open');
+    document.getElementById('navDropdown').classList.remove('open');
+  }
+});
+
+function navigate(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+  document.getElementById('navLabel').textContent = PAGE_TITLES[page];
+  document.getElementById('headerTitle').textContent = PAGE_TITLES[page];
+  document.getElementById('navTrigger').classList.remove('open');
+  document.getElementById('navDropdown').classList.remove('open');
+  currentPage = page;
+  loadCurrentPage();
+}
+
+function loadCurrentPage() {
+  const loaders = {
+    dashboard: loadDashboard,
+    calls: loadCalls,
+    assistant: loadAssistant,
+    parameters: loadParameters,
+    faqs: loadFaqs,
+    context: loadContextFiles,
+    spellrules: loadSpellRules,
+    webhooks: loadWebhooks,
+  };
+  loaders[currentPage]?.();
+}
+
+// ── API HELPERS ──────────────────────────────────────────────────────────────
+async function apiFetch(base, path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (API_KEY) headers['X-API-Key'] = API_KEY;
+  if (options.body && typeof options.body !== 'string' && !(options.body instanceof FormData)) {
+    options.body = JSON.stringify(options.body);
+  }
+  if (options.body instanceof FormData) delete headers['Content-Type'];
+  const res = await fetch(base + path, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Request failed');
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+const cp = (path, opts) => apiFetch(CP, path, opts);
+const dp = (path, opts) => apiFetch(DP, path, opts);
+
+// ── TOAST ────────────────────────────────────────────────────────────────────
+function toast(msg, type = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── MODAL ────────────────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+// ── HELPERS ──────────────────────────────────────────────────────────────────
+function fmtDuration(sec) {
+  if (!sec) return '—';
+  if (sec < 60) return sec.toFixed(0) + 's';
+  return (sec / 60).toFixed(1) + 'm';
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function stateBadge(state) {
+  const map = { done: 'badge-green', error: 'badge-red', active: 'badge-blue', connecting: 'badge-amber', completing: 'badge-amber' };
+  const labels = { done: 'Completed', error: 'Error', active: 'Active', connecting: 'Connecting', completing: 'Completing' };
+  return `<span class="badge ${map[state] || 'badge-gray'}">${labels[state] || state}</span>`;
+}
+function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function snakeToTitle(s) { return s.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()); }
+
+// ── DASHBOARD ────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  try {
+    const stats = await dp('/api/v1/calls/stats');
+    document.getElementById('stat-total').textContent = stats.total_calls;
+    document.getElementById('stat-today').textContent = stats.calls_today;
+    document.getElementById('stat-rate').textContent = stats.completion_rate + '%';
+    document.getElementById('stat-avg').textContent = stats.avg_duration_sec ? (stats.avg_duration_sec / 60).toFixed(1) : '—';
+    document.getElementById('stat-errors').textContent = stats.error_calls;
+  } catch(e) {
+    document.getElementById('stat-total').textContent = '—';
+    toast('Could not load stats — check Data Plane URL in Settings', 'error');
+  }
+  try {
+    const data = await dp('/api/v1/calls?limit=8');
+    const body = document.getElementById('recentCallsBody');
+    if (!data.calls.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No calls yet</td></tr>'; return; }
+    body.innerHTML = data.calls.map(c => `
+      <tr style="cursor:pointer" onclick="openCallDetail('${esc(c.id)}')">
+        <td><strong>${esc(c.caller_name)}</strong></td>
+        <td>${stateBadge(c.state)}</td>
+        <td>${fmtDuration(c.duration_sec)}</td>
+        <td>${fmtDate(c.started_at)}</td>
+        <td style="max-width:300px;color:var(--gray-500);font-size:13px">${esc((c.ai_summary||'').substring(0,90))}${c.ai_summary && c.ai_summary.length>90?'…':''}</td>
+      </tr>`).join('');
+  } catch(e) { document.getElementById('recentCallsBody').innerHTML = '<tr><td colspan="5" class="table-empty">Failed to load calls</td></tr>'; }
+}
+
+// ── CALLS ────────────────────────────────────────────────────────────────────
+let searchTimer;
+function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(loadCalls, 350); }
+
+async function loadCalls() {
+  const body = document.getElementById('callsBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="6"><span class="spinner"></span></td></tr>';
+  const search = document.getElementById('callSearch')?.value || '';
+  const state = document.getElementById('callStateFilter')?.value || '';
+  let url = '/api/v1/calls?limit=100';
+  if (search) url += '&search=' + encodeURIComponent(search);
+  if (state) url += '&state=' + encodeURIComponent(state);
+  try {
+    const data = await dp(url);
+    if (!data.calls.length) { body.innerHTML = '<tr><td colspan="6" class="table-empty">No calls found</td></tr>'; return; }
+    body.innerHTML = data.calls.map(c => `
+      <tr>
+        <td><strong>${esc(c.caller_name)}</strong></td>
+        <td>${stateBadge(c.state)}</td>
+        <td>${fmtDuration(c.duration_sec)}</td>
+        <td>${fmtDate(c.started_at)}</td>
+        <td style="max-width:240px;font-size:13px;color:var(--gray-500)">${esc((c.ai_summary||'').substring(0,80))}${c.ai_summary && c.ai_summary.length>80?'…':''}</td>
+        <td><button class="btn btn-sm btn-secondary" onclick="openCallDetail('${esc(c.id)}')">View</button></td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="6" class="table-empty">Failed to load calls</td></tr>'; toast(e.message, 'error'); }
+}
+
+async function openCallDetail(id) {
+  openModal('callModal');
+  document.getElementById('callModalBody').innerHTML = '<div style="text-align:center;padding:40px"><span class="spinner"></span></div>';
+  try {
+    const [detail, transcriptRes] = await Promise.allSettled([
+      dp('/api/v1/calls/' + id),
+      dp('/api/v1/calls/' + id + '/transcript'),
+    ]);
+    const d = detail.value;
+    const c = d.call;
+    const transcript = transcriptRes.status === 'fulfilled' ? transcriptRes.value.transcript : null;
+    document.getElementById('callModalTitle').textContent = `Call — ${c.caller_name}`;
+
+    const params = d.gathered_parameters;
+    const analytics = d.analytics;
+
+    let html = `
+      ${c.ai_summary ? `<div class="call-summary-box" style="margin-bottom:16px">
+        <div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">AI Summary</div>
+        ${esc(c.ai_summary)}
+      </div>` : ''}
+      <div class="detail-grid" style="margin-bottom:16px">
+        <div class="detail-item"><label>Status</label><div class="detail-value">${stateBadge(c.state)}</div></div>
+        <div class="detail-item"><label>Duration</label><div class="detail-value">${fmtDuration(c.duration_sec)}</div></div>
+        <div class="detail-item"><label>Started</label><div class="detail-value">${fmtDate(c.started_at)}</div></div>
+        <div class="detail-item"><label>Completed</label><div class="detail-value">${fmtDate(c.completed_at)}</div></div>
+        ${c.origin_url ? `<div class="detail-item" style="grid-column:span 2"><label>Source</label><div class="detail-value">${esc(c.origin_url)}</div></div>` : ''}
+      </div>`;
+
+    if (params.length) {
+      html += `<div style="margin-bottom:16px">
+        <div style="font-size:12px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Collected Information</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${params.map(p=>`<div style="background:var(--gray-50);border-radius:6px;padding:10px;border:1px solid var(--gray-200)">
+          <div style="font-size:11px;color:var(--gray-400);font-weight:600">${esc(snakeToTitle(p.parameter_name))}</div>
+          <div style="font-size:14px;color:var(--gray-800);margin-top:2px;font-weight:500">${esc(p.normalized_value || p.raw_value || '—')}</div>
+        </div>`).join('')}
+        </div></div>`;
+    }
+
+    if (analytics.length) {
+      const byStage = {};
+      analytics.forEach(a => { byStage[a.stage] = (byStage[a.stage] || 0) + a.latency_ms; });
+      html += `<div style="margin-bottom:16px">
+        <div style="font-size:12px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Response Timing</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${Object.entries(byStage).map(([stage,ms])=>`<div style="background:var(--gray-50);border-radius:6px;padding:10px;border:1px solid var(--gray-200);text-align:center;min-width:90px">
+          <div style="font-size:11px;color:var(--gray-400);font-weight:600;text-transform:uppercase">${esc(stage)}</div>
+          <div style="font-size:18px;font-weight:700;color:var(--gray-800);margin-top:2px">${(ms/1000).toFixed(2)}s</div>
+        </div>`).join('')}
+        </div></div>`;
+    }
+
+    if (transcript) {
+      html += `<div>
+        <div style="font-size:12px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Full Transcript</div>
+        <div class="call-transcript">${esc(transcript)}</div>
+      </div>`;
+    } else {
+      html += `<div style="color:var(--gray-400);font-size:13px;text-align:center;padding:16px 0">No transcript available for this call</div>`;
+    }
+
+    document.getElementById('callModalBody').innerHTML = html;
+  } catch(e) {
+    document.getElementById('callModalBody').innerHTML = `<p style="color:var(--red);padding:20px">${esc(e.message)}</p>`;
+  }
+}
+
+// ── ASSISTANT ────────────────────────────────────────────────────────────────
+async function loadAssistant() {
+  try {
+    const a = await cp('/api/v1/assistant');
+    document.getElementById('aName').value = a.persona_name || '';
+    document.getElementById('aVoice').value = a.persona_voice || 'aura-2-thalia-en';
+    document.getElementById('aNature').value = a.nature || 'friendly';
+    document.getElementById('aLanguage').value = a.language || 'en-US';
+    document.getElementById('aGreeting').value = a.greeting_message || '';
+    document.getElementById('aPrompt').value = a.system_prompt || '';
+    document.getElementById('aMaxDuration').value = a.max_call_duration_sec ? Math.round(a.max_call_duration_sec / 60) : 10;
+    document.getElementById('aSilence').value = a.silence_timeout_sec || 10;
+  } catch(e) {
+    toast('Could not load assistant config — ' + e.message, 'error');
+  }
+}
+
+async function saveAssistant(e) {
+  e.preventDefault();
+  const btn = document.getElementById('assistantSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await cp('/api/v1/assistant', {
+      method: 'PUT',
+      body: {
+        persona_name: document.getElementById('aName').value,
+        persona_voice: document.getElementById('aVoice').value,
+        nature: document.getElementById('aNature').value,
+        language: document.getElementById('aLanguage').value,
+        greeting_message: document.getElementById('aGreeting').value,
+        system_prompt: document.getElementById('aPrompt').value,
+        max_call_duration_sec: parseInt(document.getElementById('aMaxDuration').value) * 60,
+        silence_timeout_sec: parseInt(document.getElementById('aSilence').value),
+      }
+    });
+    toast('Assistant settings saved!', 'success');
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Save Changes';
+}
+
+// ── PARAMETERS ───────────────────────────────────────────────────────────────
+let editParamId = null;
+
+async function loadParameters() {
+  const body = document.getElementById('paramBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="6"><span class="spinner"></span></td></tr>';
+  try {
+    const params = await cp('/api/v1/parameters');
+    if (!params.length) { body.innerHTML = '<tr><td colspan="6" class="table-empty">No fields yet — add one above</td></tr>'; return; }
+    body.innerHTML = params.map(p => `
+      <tr draggable="true" data-id="${p.id}" data-order="${p.collection_order}">
+        <td><span class="drag-handle" title="Drag to reorder">⠿</span></td>
+        <td><strong>${esc(snakeToTitle(p.display_label))}</strong><br><span style="font-size:12px;color:var(--gray-400)">${esc(p.name)}</span></td>
+        <td><span class="badge badge-blue">${esc(p.data_type)}</span></td>
+        <td>${p.required ? '<span class="badge badge-green">Required</span>' : '<span class="badge badge-gray">Optional</span>'}</td>
+        <td>${p.collection_order}</td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-secondary" onclick="editParam(${p.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteParam(${p.id})">Delete</button>
+        </td>
+      </tr>`).join('');
+    setupParamDrag();
+  } catch(e) { body.innerHTML = '<tr><td colspan="6" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function openParamModal(id) {
+  editParamId = null;
+  document.getElementById('paramModalTitle').textContent = 'Add Collection Field';
+  document.getElementById('paramForm').reset();
+  document.getElementById('pRequired').checked = true;
+  openModal('paramModal');
+}
+
+async function editParam(id) {
+  try {
+    const p = await cp('/api/v1/parameters/' + id);
+    editParamId = id;
+    document.getElementById('paramModalTitle').textContent = 'Edit Collection Field';
+    document.getElementById('pName').value = p.name;
+    document.getElementById('pLabel').value = p.display_label;
+    document.getElementById('pType').value = p.data_type;
+    document.getElementById('pOrder').value = p.collection_order;
+    document.getElementById('pRequired').checked = p.required;
+    const hints = JSON.parse(p.extraction_hints || '[]');
+    document.getElementById('pHints').value = hints.join(', ');
+    document.getElementById('pValMsg').value = p.validation_message || '';
+    openModal('paramModal');
+  } catch(e) { toast('Could not load field: ' + e.message, 'error'); }
+}
+
+async function saveParam(e) {
+  e.preventDefault();
+  const hintsRaw = document.getElementById('pHints').value.trim();
+  const hints = hintsRaw ? hintsRaw.split(',').map(h=>h.trim()).filter(Boolean) : [];
+  const body = {
+    name: document.getElementById('pName').value,
+    display_label: document.getElementById('pLabel').value,
+    data_type: document.getElementById('pType').value,
+    collection_order: parseInt(document.getElementById('pOrder').value) || 0,
+    required: document.getElementById('pRequired').checked,
+    extraction_hints: JSON.stringify(hints),
+    validation_message: document.getElementById('pValMsg').value || null,
+  };
+  try {
+    if (editParamId) {
+      await cp('/api/v1/parameters/' + editParamId, { method: 'PUT', body });
+      toast('Field updated!', 'success');
+    } else {
+      await cp('/api/v1/parameters', { method: 'POST', body });
+      toast('Field added!', 'success');
+    }
+    closeModal('paramModal');
+    loadParameters();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function deleteParam(id) {
+  if (!confirm('Delete this collection field?')) return;
+  try {
+    await cp('/api/v1/parameters/' + id, { method: 'DELETE' });
+    toast('Field deleted', 'success');
+    loadParameters();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+function setupParamDrag() {
+  const rows = document.querySelectorAll('#paramBody tr[draggable]');
+  let dragSrc = null;
+  rows.forEach(row => {
+    row.addEventListener('dragstart', () => { dragSrc = row; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { row.classList.remove('dragging'); saveParamOrder(); });
+    row.addEventListener('dragover', e => { e.preventDefault(); if (dragSrc !== row) row.parentNode.insertBefore(dragSrc, row); });
+  });
+}
+
+async function saveParamOrder() {
+  const rows = document.querySelectorAll('#paramBody tr[data-id]');
+  const items = [...rows].map((r, i) => ({ id: parseInt(r.dataset.id), collection_order: i }));
+  try {
+    await cp('/api/v1/parameters/reorder', { method: 'POST', body: { items } });
+    toast('Order saved', 'success');
+    loadParameters();
+  } catch(e) { toast('Reorder failed: ' + e.message, 'error'); }
+}
+
+// ── FAQs ─────────────────────────────────────────────────────────────────────
+let editFaqId = null;
+
+async function loadFaqs() {
+  const body = document.getElementById('faqBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="4"><span class="spinner"></span></td></tr>';
+  try {
+    const faqs = await cp('/api/v1/faqs');
+    if (!faqs.length) { body.innerHTML = '<tr><td colspan="4" class="table-empty">No FAQs yet</td></tr>'; return; }
+    body.innerHTML = faqs.map(f => `
+      <tr>
+        <td>
+          <div style="font-weight:500">${esc(f.question)}</div>
+          <div style="font-size:13px;color:var(--gray-500);margin-top:4px">${esc(f.answer.substring(0,100))}${f.answer.length>100?'…':''}</div>
+        </td>
+        <td>${f.category ? `<span class="badge badge-gray">${esc(f.category)}</span>` : '—'}</td>
+        <td>
+          <label class="toggle"><input type="checkbox" ${f.enabled?'checked':''} onchange="toggleFaq(${f.id},this.checked)"><span class="toggle-slider"></span></label>
+        </td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-secondary" onclick="editFaq(${f.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteFaq(${f.id})">Delete</button>
+        </td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="4" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function openFaqModal() {
+  editFaqId = null;
+  document.getElementById('faqModalTitle').textContent = 'Add FAQ';
+  document.getElementById('faqForm').reset();
+  document.getElementById('fEnabled').checked = true;
+  openModal('faqModal');
+}
+
+async function editFaq(id) {
+  try {
+    const f = await cp('/api/v1/faqs/' + id);
+    editFaqId = id;
+    document.getElementById('faqModalTitle').textContent = 'Edit FAQ';
+    document.getElementById('fQuestion').value = f.question;
+    document.getElementById('fAnswer').value = f.answer;
+    document.getElementById('fCategory').value = f.category || '';
+    document.getElementById('fEnabled').checked = f.enabled;
+    openModal('faqModal');
+  } catch(e) { toast('Could not load FAQ: ' + e.message, 'error'); }
+}
+
+async function saveFaq(e) {
+  e.preventDefault();
+  const body = {
+    question: document.getElementById('fQuestion').value,
+    answer: document.getElementById('fAnswer').value,
+    category: document.getElementById('fCategory').value || null,
+    enabled: document.getElementById('fEnabled').checked,
+  };
+  try {
+    if (editFaqId) {
+      await cp('/api/v1/faqs/' + editFaqId, { method: 'PUT', body });
+      toast('FAQ updated!', 'success');
+    } else {
+      await cp('/api/v1/faqs', { method: 'POST', body });
+      toast('FAQ added!', 'success');
+    }
+    closeModal('faqModal');
+    loadFaqs();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function toggleFaq(id, enabled) {
+  try {
+    await cp('/api/v1/faqs/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'FAQ enabled' : 'FAQ disabled', 'success');
+  } catch(e) { toast('Update failed: ' + e.message, 'error'); loadFaqs(); }
+}
+
+async function deleteFaq(id) {
+  if (!confirm('Delete this FAQ?')) return;
+  try {
+    await cp('/api/v1/faqs/' + id, { method: 'DELETE' });
+    toast('FAQ deleted', 'success');
+    loadFaqs();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── CONTEXT FILES ─────────────────────────────────────────────────────────────
+async function loadContextFiles() {
+  const body = document.getElementById('contextBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr>';
+  try {
+    const files = await cp('/api/v1/context-files');
+    if (!files.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No files uploaded yet</td></tr>'; return; }
+    body.innerHTML = files.map(f => `
+      <tr>
+        <td>
+          <div style="font-weight:500">${esc(f.original_name)}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${esc(f.mime_type)}</div>
+        </td>
+        <td style="font-size:13px;color:var(--gray-500)">${esc(f.description||'—')}</td>
+        <td style="font-size:13px">${(f.size_bytes/1024).toFixed(0)} KB</td>
+        <td>
+          <label class="toggle"><input type="checkbox" ${f.enabled?'checked':''} onchange="toggleContextFile(${f.id},this.checked)"><span class="toggle-slider"></span></label>
+        </td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteContextFile(${f.id})">Delete</button></td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="5" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function handleFileDrop(e) {
+  e.preventDefault();
+  document.getElementById('uploadZone').classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file) uploadContextFile(file);
+}
+
+async function uploadContextFile(file) {
+  if (!file) return;
+  const zone = document.getElementById('uploadZone');
+  zone.innerHTML = '<span class="spinner"></span> <span style="font-size:14px;color:var(--gray-500)">Uploading…</span>';
+  zone.style.display = 'flex'; zone.style.justifyContent = 'center'; zone.style.alignItems = 'center';
+  const formData = new FormData();
+  formData.append('file', file);
+  const desc = document.getElementById('fileDescription').value.trim();
+  if (desc) formData.append('description', desc);
+  try {
+    const headers = {};
+    if (API_KEY) headers['X-API-Key'] = API_KEY;
+    const res = await fetch(CP + '/api/v1/context-files', { method: 'POST', headers, body: formData });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
+    toast('File uploaded!', 'success');
+    document.getElementById('fileDescription').value = '';
+    loadContextFiles();
+  } catch(e) { toast('Upload failed: ' + e.message, 'error'); }
+  zone.style.display = ''; zone.style.justifyContent = ''; zone.style.alignItems = '';
+  zone.innerHTML = `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><p><strong>Click to upload</strong> or drag and drop</p><p style="font-size:12px;margin-top:4px">PDF, TXT, DOCX, CSV — up to 10MB</p>`;
+}
+
+async function toggleContextFile(id, enabled) {
+  try {
+    await cp('/api/v1/context-files/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'File enabled' : 'File disabled', 'success');
+  } catch(e) { toast('Update failed: ' + e.message, 'error'); loadContextFiles(); }
+}
+
+async function deleteContextFile(id) {
+  if (!confirm('Delete this file? This cannot be undone.')) return;
+  try {
+    await cp('/api/v1/context-files/' + id, { method: 'DELETE' });
+    toast('File deleted', 'success');
+    loadContextFiles();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── SPELL RULES ───────────────────────────────────────────────────────────────
+async function loadSpellRules() {
+  const body = document.getElementById('spellBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="4"><span class="spinner"></span></td></tr>';
+  try {
+    const rules = await cp('/api/v1/spell-rules');
+    if (!rules.length) { body.innerHTML = '<tr><td colspan="4" class="table-empty">No corrections yet</td></tr>'; return; }
+    body.innerHTML = rules.map(r => `
+      <tr>
+        <td style="color:var(--red)">${esc(r.wrong_form)}</td>
+        <td style="color:var(--green);font-weight:500">${esc(r.correct_form)}</td>
+        <td>
+          <label class="toggle"><input type="checkbox" ${r.enabled?'checked':''} onchange="toggleSpellRule(${r.id},this.checked)"><span class="toggle-slider"></span></label>
+        </td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteSpellRule(${r.id})">Delete</button></td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="4" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function openSpellModal() {
+  document.getElementById('spellForm').reset();
+  openModal('spellModal');
+}
+
+async function saveSpell(e) {
+  e.preventDefault();
+  try {
+    await cp('/api/v1/spell-rules', {
+      method: 'POST',
+      body: { wrong_form: document.getElementById('sWrong').value, correct_form: document.getElementById('sCorrect').value, rule_type: 'substitution', enabled: true }
+    });
+    toast('Correction rule added!', 'success');
+    closeModal('spellModal');
+    loadSpellRules();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function deleteSpellRule(id) {
+  if (!confirm('Delete this correction rule?')) return;
+  try {
+    await cp('/api/v1/spell-rules/' + id, { method: 'DELETE' });
+    toast('Rule deleted', 'success');
+    loadSpellRules();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── WEBHOOKS ──────────────────────────────────────────────────────────────────
+let editWebhookId = null;
+
+async function loadWebhooks() {
+  const body = document.getElementById('webhookBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr>';
+  try {
+    const hooks = await cp('/api/v1/webhooks');
+    if (!hooks.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No webhooks yet</td></tr>'; return; }
+    body.innerHTML = hooks.map(h => {
+      const events = JSON.parse(h.events || '[]');
+      return `
+      <tr>
+        <td><strong>${esc(h.name)}</strong></td>
+        <td style="font-size:12px;color:var(--gray-500);word-break:break-all">${esc(h.url)}</td>
+        <td>${events.map(ev=>`<span class="badge badge-blue" style="margin:2px">${esc(ev)}</span>`).join('')}</td>
+        <td>
+          <label class="toggle"><input type="checkbox" ${h.enabled?'checked':''} onchange="toggleWebhook(${h.id},this.checked)"><span class="toggle-slider"></span></label>
+        </td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-secondary" onclick="testWebhook(${h.id})">Test</button>
+          <button class="btn btn-sm btn-secondary" onclick="editWebhook(${h.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteWebhook(${h.id})">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="5" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function openWebhookModal() {
+  editWebhookId = null;
+  document.getElementById('webhookModalTitle').textContent = 'Add Notification Webhook';
+  document.getElementById('webhookForm').reset();
+  document.getElementById('wTimeout').value = 10;
+  document.getElementById('wRetry').value = 3;
+  openModal('webhookModal');
+}
+
+async function editWebhook(id) {
+  try {
+    const h = await cp('/api/v1/webhooks/' + id);
+    editWebhookId = id;
+    document.getElementById('webhookModalTitle').textContent = 'Edit Webhook';
+    document.getElementById('wName').value = h.name;
+    document.getElementById('wUrl').value = h.url;
+    document.getElementById('wSecretHeader').value = h.secret_header || '';
+    document.getElementById('wSecretValue').value = '';
+    document.getElementById('wTimeout').value = h.timeout_sec || 10;
+    document.getElementById('wRetry').value = h.retry_count || 3;
+    openModal('webhookModal');
+  } catch(e) { toast('Could not load webhook: ' + e.message, 'error'); }
+}
+
+async function saveWebhook(e) {
+  e.preventDefault();
+  const body = {
+    name: document.getElementById('wName').value,
+    url: document.getElementById('wUrl').value,
+    secret_header: document.getElementById('wSecretHeader').value || null,
+    secret_value: document.getElementById('wSecretValue').value || null,
+    events: ['call.completed'],
+    timeout_sec: parseInt(document.getElementById('wTimeout').value) || 10,
+    retry_count: parseInt(document.getElementById('wRetry').value) || 3,
+    enabled: true,
+  };
+  try {
+    if (editWebhookId) {
+      await cp('/api/v1/webhooks/' + editWebhookId, { method: 'PUT', body });
+      toast('Webhook updated!', 'success');
+    } else {
+      await cp('/api/v1/webhooks', { method: 'POST', body });
+      toast('Webhook added!', 'success');
+    }
+    closeModal('webhookModal');
+    loadWebhooks();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function toggleWebhook(id, enabled) {
+  try {
+    await cp('/api/v1/webhooks/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'Webhook enabled' : 'Webhook disabled', 'success');
+  } catch(e) { toast('Update failed: ' + e.message, 'error'); loadWebhooks(); }
+}
+
+async function testWebhook(id) {
+  try {
+    const res = await cp('/api/v1/webhooks/' + id + '/test', { method: 'POST' });
+    const ok = res.status >= 200 && res.status < 300;
+    toast(`Test ${ok?'succeeded':'failed'} — HTTP ${res.status}`, ok?'success':'warning');
+  } catch(e) { toast('Test failed: ' + e.message, 'error'); }
+}
+
+async function deleteWebhook(id) {
+  if (!confirm('Delete this webhook?')) return;
+  try {
+    await cp('/api/v1/webhooks/' + id, { method: 'DELETE' });
+    toast('Webhook deleted', 'success');
+    loadWebhooks();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── SPELL RULE PATCH (PUT needs all fields — use enabled flag separately) ────
+// spell-rules PUT endpoint needs full object, patch toggles via re-fetch
+async function toggleSpellRule(id, enabled) {
+  try {
+    const r = await cp('/api/v1/spell-rules/' + id);
+    await cp('/api/v1/spell-rules/' + id, { method: 'PUT', body: { wrong_form: r.wrong_form, correct_form: r.correct_form, rule_type: r.rule_type, enabled } });
+    toast(enabled ? 'Rule enabled' : 'Rule disabled', 'success');
+  } catch(e) { toast('Update failed: ' + e.message, 'error'); loadSpellRules(); }
+}
+
+// ── BOOT ─────────────────────────────────────────────────────────────────────
+loadDashboard();
+</script>
+</body>
+</html>

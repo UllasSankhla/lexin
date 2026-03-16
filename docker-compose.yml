@@ -1,0 +1,64 @@
+version: '3.9'
+
+services:
+  control-plane:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=sqlite:////data/control_plane.db
+      - STORAGE_BASE_PATH=/storage
+      - CONTEXT_FILES_PATH=/storage/context_files
+      - SYSTEM_PROMPTS_PATH=/storage/system_prompts
+      - API_KEY=${CONTROL_PLANE_API_KEY:-change-me}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5500}
+      - LOG_LEVEL=INFO
+    volumes:
+      - control_plane_data:/data
+      - control_plane_storage:/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  data-plane:
+    build:
+      context: ./data-plane
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=sqlite:////data/data_plane.db
+      - STORAGE_BASE_PATH=/storage
+      - TRANSCRIPTS_PATH=/storage/transcripts
+      - RECORDINGS_PATH=/storage/recordings
+      - CONTROL_PLANE_URL=http://control-plane:8000
+      - CONTROL_PLANE_API_KEY=${CONTROL_PLANE_API_KEY:-change-me}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5500}
+      - LOG_LEVEL=INFO
+    volumes:
+      - data_plane_data:/data
+      - data_plane_storage:/storage
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  control_plane_data:
+  control_plane_storage:
+  data_plane_data:
+  data_plane_storage:

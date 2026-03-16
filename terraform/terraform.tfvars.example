@@ -1,0 +1,14 @@
+aws_region       = "us-west-2"
+instance_type    = "t3.small"
+key_pair_name    = "my-key-pair"
+ssh_allowed_cidr = "203.0.113.10/32"   # restrict to your office/VPN IP
+
+api_domain   = "api.lexinflow.com"
+voice_domain = "voice.lexinflow.com"
+admin_email  = "ops@yourdomain.com"
+
+# Optional — adjust if you need more storage
+data_volume_size_gb = 20
+root_volume_size_gb = 20
+
+app_env = "production"

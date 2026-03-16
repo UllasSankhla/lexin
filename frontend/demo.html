@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Booking Widget Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .demo-card {
+      background: white;
+      border-radius: 20px;
+      padding: 48px 40px;
+      max-width: 600px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 { margin: 0 0 12px; font-size: 28px; color: #1a1a2e; }
+    p { color: #666; line-height: 1.6; margin-bottom: 24px; }
+    .features {
+      list-style: none;
+      padding: 0; margin: 0 0 32px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .features li {
+      padding: 10px 14px;
+      background: #f5f5ff;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #4F46E5;
+    }
+    .features li::before { content: "✓ "; font-weight: 700; }
+    .config-section {
+      background: #f8f8f8;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .config-section h3 { margin: 0 0 12px; font-size: 15px; color: #333; }
+    label { font-size: 13px; color: #666; display: block; margin-bottom: 4px; }
+    input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 12px;
+      outline: none;
+    }
+    input:focus { border-color: #4F46E5; }
+    .hint {
+      font-size: 12px;
+      color: #aaa;
+      margin-top: -8px;
+      margin-bottom: 12px;
+    }
+    .reload-btn {
+      background: #4F46E5;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+    .reload-btn:hover { background: #4338ca; }
+    .widget-note {
+      text-align: center;
+      color: #999;
+      font-size: 13px;
+      margin-top: 16px;
+    }
+    .code-block {
+      background: #1e1e2e;
+      color: #a0a0d0;
+      border-radius: 10px;
+      padding: 16px;
+      font-family: monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-x: auto;
+      margin-top: 24px;
+    }
+    .code-block .key { color: #7ec8e3; }
+    .code-block .val { color: #b8e0b8; }
+  </style>
+</head>
+<body>
+  <div class="demo-card">
+    <h1>🎙️ Voice Booking Assistant</h1>
+    <p>Click the button in the bottom-right corner to start a voice call with your AI appointment booking assistant.</p>
+
+    <ul class="features">
+      <li>Real-time speech recognition</li>
+      <li>AI-powered conversation</li>
+      <li>Natural voice responses</li>
+      <li>Auto parameter collection</li>
+      <li>Appointment scheduling</li>
+      <li>Embeddable anywhere</li>
+    </ul>
+
+    <div class="config-section">
+      <h3>Widget Configuration</h3>
+      <label>Data Plane API URL</label>
+      <input type="text" id="cfg-api-url" value="http://localhost:8001" />
+
+      <label>Customer Key</label>
+      <input type="text" id="cfg-customer-key" value="ck_live_359b05dfdffaf61eed7e51f1c34365c4e900ee1c" />
+      <p class="hint">Pass this in the X-Customer-Key header — required to initiate calls.</p>
+
+      <label>Primary Color</label>
+      <input type="text" id="cfg-color" value="#4F46E5" />
+
+      <label>Button Label</label>
+      <input type="text" id="cfg-label" value="Book Appointment" />
+
+      <button class="reload-btn" onclick="reloadWidget()">Apply & Reload Widget</button>
+    </div>
+
+    <div class="code-block">
+      &lt;<span class="key">script</span><br>
+      &nbsp;&nbsp;<span class="key">src</span>=<span class="val">"booking-widget.js"</span><br>
+      &nbsp;&nbsp;<span class="key">data-api-url</span>=<span class="val">"https://your-domain.com"</span><br>
+      &nbsp;&nbsp;<span class="key">data-customer-key</span>=<span class="val">"ck_live_..."</span><br>
+      &nbsp;&nbsp;<span class="key">data-theme</span>=<span class="val">"light"</span><br>
+      &nbsp;&nbsp;<span class="key">data-position</span>=<span class="val">"bottom-right"</span><br>
+      &nbsp;&nbsp;<span class="key">data-primary-color</span>=<span class="val">"#4F46E5"</span><br>
+      &gt;&lt;/<span class="key">script</span>&gt;
+    </div>
+
+    <p class="widget-note">The widget loads automatically — look for the microphone button in the bottom-right corner.</p>
+  </div>
+
+  <script>
+    function reloadWidget() {
+      const apiUrl = document.getElementById('cfg-api-url').value;
+      const customerKey = document.getElementById('cfg-customer-key').value;
+      const color = document.getElementById('cfg-color').value;
+      const label = document.getElementById('cfg-label').value;
+
+      // Remove existing widget
+      const existing = document.getElementById('booking-widget-host');
+      if (existing) existing.remove();
+      const existingScript = document.getElementById('widget-script');
+      if (existingScript) existingScript.remove();
+
+      // Re-inject
+      const script = document.createElement('script');
+      script.id = 'widget-script';
+      script.src = 'booking-widget.js';
+      script.dataset.apiUrl = apiUrl;
+      script.dataset.customerKey = customerKey;
+      script.dataset.primaryColor = color;
+      script.dataset.buttonLabel = label;
+      script.dataset.debug = 'true';
+      document.body.appendChild(script);
+    }
+  </script>
+
+  <!-- Auto-load widget with default config -->
+  <script
+    src="booking-widget.js"
+    data-api-url="http://localhost:8001"
+    data-customer-key="ck_live_359b05dfdffaf61eed7e51f1c34365c4e900ee1c"
+    data-theme="light"
+    data-position="bottom-right"
+    data-primary-color="#4F46E5"
+    data-button-label="Book Appointment"
+    data-debug="true"
+  ></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "ck_live_REPLACE_WITH_RANDOM_32_CHARS_1": { "name": "Nexus Law",   "enabled": true  },
+  "ck_live_REPLACE_WITH_RANDOM_32_CHARS_2": { "name": "Acme Corp",   "enabled": true  },
+  "ck_test_REPLACE_WITH_RANDOM_32_CHARS_3": { "name": "Test Client", "enabled": false }
+}

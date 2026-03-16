@@ -1,0 +1,11 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+sqlalchemy==2.0.36
+pydantic==2.10.4
+pydantic-settings==2.7.0
+httpx==0.28.1
+aiofiles==24.1.0
+python-dotenv==1.0.1
+deepgram-sdk==6.0.1
+cerebras-cloud-sdk==1.21.0
