@@ -1175,7 +1175,10 @@ async function loadAssistant() {
     document.getElementById('aMaxDuration').value = a.max_call_duration_sec ? Math.round(a.max_call_duration_sec / 60) : 10;
     document.getElementById('aSilence').value = a.silence_timeout_sec || 10;
   } catch(e) {
-    toast('Could not load assistant config — ' + e.message, 'error');
+    if (!e.message.includes('404') && !e.message.toLowerCase().includes('not found')) {
+      toast('Could not load assistant config — ' + e.message, 'error');
+    }
+    // 404 = no config yet, leave the form blank so the user can create one
   }
 }
 
