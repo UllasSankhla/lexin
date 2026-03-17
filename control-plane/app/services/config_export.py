@@ -20,7 +20,7 @@ def build_config_export(db: Session, owner_id: str) -> dict:
 
     assistant = db.query(AssistantConfig).filter(AssistantConfig.owner_id == owner_id).first()
     if not assistant:
-        return {"error": "No assistant configuration found"}
+        logger.warning("No assistant config found for owner=%s — returning empty shell", owner_id)
 
     parameters = (
         db.query(CollectionParameter)
@@ -52,15 +52,15 @@ def build_config_export(db: Session, owner_id: str) -> dict:
 
     export = {
         "assistant": {
-            "id": assistant.id,
-            "persona_name": assistant.persona_name,
-            "persona_voice": assistant.persona_voice,
-            "nature": assistant.nature,
-            "system_prompt": assistant.system_prompt,
-            "greeting_message": assistant.greeting_message,
-            "max_call_duration_sec": assistant.max_call_duration_sec,
-            "silence_timeout_sec": assistant.silence_timeout_sec,
-            "language": assistant.language,
+            "id": assistant.id if assistant else None,
+            "persona_name": assistant.persona_name if assistant else "Assistant",
+            "persona_voice": assistant.persona_voice if assistant else "aura-2-thalia-en",
+            "nature": assistant.nature if assistant else "friendly",
+            "system_prompt": assistant.system_prompt if assistant else "",
+            "greeting_message": assistant.greeting_message if assistant else "Hello! How can I help you today?",
+            "max_call_duration_sec": assistant.max_call_duration_sec if assistant else 600,
+            "silence_timeout_sec": assistant.silence_timeout_sec if assistant else 10,
+            "language": assistant.language if assistant else "en-US",
         },
         "parameters": [
             {
