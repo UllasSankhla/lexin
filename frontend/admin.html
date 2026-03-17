@@ -1265,7 +1265,7 @@ async function saveParam(e) {
     data_type: document.getElementById('pType').value,
     collection_order: parseInt(document.getElementById('pOrder').value) || 0,
     required: document.getElementById('pRequired').checked,
-    extraction_hints: JSON.stringify(hints),
+    extraction_hints: hints.length ? hints : null,
     validation_message: document.getElementById('pValMsg').value || null,
   };
   try {
