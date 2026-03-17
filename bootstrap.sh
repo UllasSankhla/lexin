@@ -208,6 +208,9 @@ server {
         alias /opt/codelexin/frontend/;
         expires 1h;
     }
+    location = /admin {
+        return 301 /static/admin.html;
+    }
 }
 NGINXEOF
 
