@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     deepgram_stt_model: str = "flux-general-en"
     deepgram_tts_model: str = "aura-2-thalia-en"
     deepgram_stt_language: str = "en-US"
-    deepgram_eot_threshold: float = 0.6
-    deepgram_eot_timeout_ms: int = 5000
+    deepgram_eot_threshold: float = 0.9
+    deepgram_eot_timeout_ms: int = 1200
+    deepgram_eot_hold_ms: int = 500   # extra hold after EndOfTurn before firing on_final
 
     cerebras_api_key: str = ""
     cerebras_model: str = "llama-4-scout-17b-16e-instruct"

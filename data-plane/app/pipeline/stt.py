@@ -56,6 +56,10 @@ class STTSession:
         self._pending_text: str = ""
         self._pending_confidence: float = 0.0
 
+        # Hold-off: delay on_final by eot_hold_ms after EndOfTurn so that a
+        # TurnResumed arriving late can still cancel the final dispatch.
+        self._eot_hold_task: asyncio.Task | None = None
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _apply_spell_rules(self, text: str) -> str:
@@ -123,10 +127,13 @@ class STTSession:
             return
 
         if event == "EndOfTurn":
-            logger.info("STT end-of-turn | text=%r | conf=%.2f", text, confidence)
+            logger.info("STT end-of-turn | text=%r | conf=%.2f — starting %.0fms hold", text, confidence, settings.deepgram_eot_hold_ms)
             self._pending_text = ""
             self._pending_confidence = 0.0
-            asyncio.create_task(self._on_final(text, confidence, elapsed_ms))
+            self._cancel_eot_hold()
+            self._eot_hold_task = asyncio.create_task(
+                self._dispatch_final_after_hold(text, confidence, elapsed_ms)
+            )
 
         elif event == "EagerEndOfTurn":
             logger.info("STT eager end-of-turn — storing as pending | text=%r", text)
@@ -135,14 +142,33 @@ class STTSession:
             asyncio.create_task(self._on_interim(text, confidence))
 
         elif event == "TurnResumed":
-            logger.info("STT turn resumed (was eager EOT) | text=%r", text)
+            logger.info("STT turn resumed (was eager EOT) — cancelling hold | text=%r", text)
+            self._cancel_eot_hold()
             self._pending_text = ""
             self._pending_confidence = 0.0
             asyncio.create_task(self._on_interim(text, confidence))
 
         else:
-            # "Update" or "StartOfTurn"
+            # "Update" or "StartOfTurn" — cancel any pending hold (user still speaking)
+            if event == "StartOfTurn":
+                self._cancel_eot_hold()
             asyncio.create_task(self._on_interim(text, confidence))
+
+    def _cancel_eot_hold(self) -> None:
+        if self._eot_hold_task and not self._eot_hold_task.done():
+            self._eot_hold_task.cancel()
+            logger.debug("STT EOT hold cancelled")
+        self._eot_hold_task = None
+
+    async def _dispatch_final_after_hold(self, text: str, confidence: float, elapsed_ms: float) -> None:
+        """Wait eot_hold_ms then fire on_final — cancelled if user resumes speaking."""
+        try:
+            hold_sec = settings.deepgram_eot_hold_ms / 1000.0
+            await asyncio.sleep(hold_sec)
+            logger.info("STT EOT hold elapsed — dispatching final | text=%r", text)
+            await self._on_final(text, confidence, elapsed_ms)
+        except asyncio.CancelledError:
+            logger.info("STT EOT hold cancelled — user resumed speaking | text=%r", text)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -191,6 +217,7 @@ class STTSession:
         logger.info("STT finish_utterance called (no-op in v2; EOT is model-driven)")
 
     async def close(self) -> None:
+        self._cancel_eot_hold()
         self._connected = False
         if self._connection:
             try:
