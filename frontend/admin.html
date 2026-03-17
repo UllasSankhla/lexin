@@ -370,6 +370,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         Notifications
       </div>
+      <div class="nav-item" data-page="calendly" onclick="navigate('calendly')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Calendly
+      </div>
       <hr class="nav-divider">
       <div class="nav-section-label">Deploy</div>
       <div class="nav-item" data-page="apikeys" onclick="navigate('apikeys')">
@@ -614,6 +618,62 @@
         <table>
           <thead><tr><th>Heard As</th><th>Correct To</th><th>Active</th><th></th></tr></thead>
           <tbody id="spellBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- CALENDLY -->
+  <section class="page" id="page-calendly">
+    <div class="page-header">
+      <h1>Calendly Integration</h1>
+      <p>Connect your Calendly account so the AI can check availability and book appointments</p>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">Calendly Account</span></div>
+      <div class="card-body">
+        <form id="calendlyForm" onsubmit="saveCalendly(event)">
+          <div class="form-grid">
+            <div class="form-group span2">
+              <label>Personal Access Token <span class="label-hint">From Calendly → Integrations → API &amp; Webhooks</span></label>
+              <input type="password" id="cToken" placeholder="eyJhb…" autocomplete="off">
+            </div>
+            <div class="form-group span2">
+              <label>User URI <span class="label-hint">e.g. https://api.calendly.com/users/XXXXXX</span></label>
+              <input type="text" id="cUserUri" placeholder="https://api.calendly.com/users/...">
+            </div>
+            <div class="form-group span2">
+              <label>Organization URI <span class="label-hint">Optional — leave blank for personal account</span></label>
+              <input type="text" id="cOrgUri" placeholder="https://api.calendly.com/organizations/...">
+            </div>
+            <div class="form-group">
+              <label>Lookahead Days <span class="label-hint">How far ahead to search for slots</span></label>
+              <input type="number" id="cLookahead" value="30" min="1" max="365">
+            </div>
+            <div class="form-group">
+              <label>Timezone <span class="label-hint">e.g. America/Los_Angeles</span></label>
+              <input type="text" id="cTimezone" placeholder="America/Los_Angeles" value="America/Los_Angeles">
+            </div>
+            <div class="form-group span2">
+              <div class="toggle-wrap">
+                <label class="toggle"><input type="checkbox" id="cEnabled" checked><span class="toggle-slider"></span></label>
+                <span style="font-size:14px;font-weight:500;color:var(--gray-700)">Enable Calendly scheduling</span>
+              </div>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary" id="calendlySaveBtn">Save Settings</button>
+        </form>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Event Types</span>
+        <button class="btn btn-primary btn-sm" onclick="openEventTypeModal()">+ Add Event Type</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Description</th><th>Event Type URI</th><th>Active</th><th></th></tr></thead>
+          <tbody id="eventTypeBody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr></tbody>
         </table>
       </div>
     </div>
@@ -873,6 +933,36 @@
   </div>
 </div>
 
+<!-- Event Type Modal -->
+<div class="modal-overlay" id="eventTypeModal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <span class="modal-title" id="eventTypeModalTitle">Add Event Type</span>
+      <button class="modal-close" onclick="closeModal('eventTypeModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="eventTypeForm" onsubmit="saveEventType(event)">
+        <div class="form-group">
+          <label>Name <span class="label-hint">e.g. 30 Minute Consultation</span></label>
+          <input type="text" id="etName" required placeholder="e.g. Initial Consultation">
+        </div>
+        <div class="form-group">
+          <label>Description <span class="label-hint">Optional — helps AI match caller intent</span></label>
+          <input type="text" id="etDesc" placeholder="e.g. First meeting to discuss your case">
+        </div>
+        <div class="form-group">
+          <label>Event Type URI <span class="label-hint">From Calendly API or event URL</span></label>
+          <input type="text" id="etUri" required placeholder="https://api.calendly.com/event_types/...">
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('eventTypeModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('eventTypeForm').requestSubmit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- API Key Modal -->
 <div class="modal-overlay" id="keyModal">
   <div class="modal" style="max-width:420px">
@@ -1029,7 +1119,7 @@ const PAGE_TITLES = {
   dashboard: 'Dashboard', calls: 'Calls & Transcripts', assistant: 'AI Assistant',
   parameters: 'Info to Collect', faqs: 'FAQs', context: 'Knowledge Files',
   spellrules: 'Name Corrections', webhooks: 'Notifications',
-  apikeys: 'API Keys', test: 'Test Agent'
+  calendly: 'Calendly Integration', apikeys: 'API Keys', test: 'Test Agent'
 };
 let currentPage = 'dashboard';
 
@@ -1067,6 +1157,7 @@ function loadCurrentPage() {
     context: loadContextFiles,
     spellrules: loadSpellRules,
     webhooks: loadWebhooks,
+    calendly: loadCalendly,
     apikeys: loadApiKeys,
     test: loadTest,
   };
@@ -1705,6 +1796,125 @@ async function toggleSpellRule(id, enabled) {
     await cp('/api/v1/spell-rules/' + id, { method: 'PUT', body: { wrong_form: r.wrong_form, correct_form: r.correct_form, rule_type: r.rule_type, enabled } });
     toast(enabled ? 'Rule enabled' : 'Rule disabled', 'success');
   } catch(e) { toast('Update failed: ' + e.message, 'error'); loadSpellRules(); }
+}
+
+// ── CALENDLY ─────────────────────────────────────────────────────────────────
+async function loadCalendly() {
+  try {
+    const c = await cp('/api/v1/calendly/config');
+    if (c) {
+      document.getElementById('cToken').value = c.api_token || '';
+      document.getElementById('cUserUri').value = c.user_uri || '';
+      document.getElementById('cOrgUri').value = c.organization_uri || '';
+      document.getElementById('cLookahead').value = c.lookahead_days || 30;
+      document.getElementById('cTimezone').value = c.timezone || 'America/Los_Angeles';
+      document.getElementById('cEnabled').checked = c.enabled !== false;
+    }
+  } catch(e) {
+    if (!e.message.includes('404') && !e.message.toLowerCase().includes('not found')) {
+      toast('Could not load Calendly config: ' + e.message, 'error');
+    }
+  }
+  await loadEventTypes();
+}
+
+async function saveCalendly(e) {
+  e.preventDefault();
+  const btn = document.getElementById('calendlySaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const body = {
+      api_token: document.getElementById('cToken').value,
+      user_uri: document.getElementById('cUserUri').value || null,
+      organization_uri: document.getElementById('cOrgUri').value || null,
+      lookahead_days: parseInt(document.getElementById('cLookahead').value) || 30,
+      timezone: document.getElementById('cTimezone').value || 'America/Los_Angeles',
+      enabled: document.getElementById('cEnabled').checked,
+    };
+    await cp('/api/v1/calendly/config', { method: 'PUT', body });
+    toast('Calendly settings saved!', 'success');
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Save Settings';
+}
+
+let editEventTypeId = null;
+
+async function loadEventTypes() {
+  const body = document.getElementById('eventTypeBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr>';
+  try {
+    const types = await cp('/api/v1/calendly/event-types');
+    if (!types.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No event types yet — add one above</td></tr>'; return; }
+    body.innerHTML = types.map(t => `
+      <tr>
+        <td><strong>${esc(t.name)}</strong></td>
+        <td style="font-size:13px;color:var(--gray-500)">${esc(t.description || '—')}</td>
+        <td style="font-size:12px;font-family:monospace;word-break:break-all">${esc(t.event_type_uri)}</td>
+        <td><label class="toggle"><input type="checkbox" ${t.enabled?'checked':''} onchange="toggleEventType(${t.id},this.checked)"><span class="toggle-slider"></span></label></td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-secondary" onclick="editEventType(${t.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteEventType(${t.id})">Delete</button>
+        </td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="5" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function openEventTypeModal() {
+  editEventTypeId = null;
+  document.getElementById('eventTypeModalTitle').textContent = 'Add Event Type';
+  document.getElementById('eventTypeForm').reset();
+  openModal('eventTypeModal');
+}
+
+async function editEventType(id) {
+  try {
+    const types = await cp('/api/v1/calendly/event-types');
+    const t = types.find(x => x.id === id);
+    if (!t) { toast('Event type not found', 'error'); return; }
+    editEventTypeId = id;
+    document.getElementById('eventTypeModalTitle').textContent = 'Edit Event Type';
+    document.getElementById('etName').value = t.name;
+    document.getElementById('etDesc').value = t.description || '';
+    document.getElementById('etUri').value = t.event_type_uri;
+    openModal('eventTypeModal');
+  } catch(e) { toast('Could not load event type: ' + e.message, 'error'); }
+}
+
+async function saveEventType(e) {
+  e.preventDefault();
+  const body = {
+    name: document.getElementById('etName').value,
+    description: document.getElementById('etDesc').value || null,
+    event_type_uri: document.getElementById('etUri').value,
+    enabled: true,
+  };
+  try {
+    if (editEventTypeId) {
+      await cp('/api/v1/calendly/event-types/' + editEventTypeId, { method: 'PATCH', body });
+      toast('Event type updated!', 'success');
+    } else {
+      await cp('/api/v1/calendly/event-types', { method: 'POST', body });
+      toast('Event type added!', 'success');
+    }
+    closeModal('eventTypeModal');
+    loadEventTypes();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function toggleEventType(id, enabled) {
+  try {
+    await cp('/api/v1/calendly/event-types/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'Enabled' : 'Disabled', 'success');
+  } catch(e) { toast('Update failed', 'error'); loadEventTypes(); }
+}
+
+async function deleteEventType(id) {
+  if (!confirm('Delete this event type?')) return;
+  try {
+    await cp('/api/v1/calendly/event-types/' + id, { method: 'DELETE' });
+    toast('Event type deleted', 'success');
+    loadEventTypes();
+  } catch(e) { toast('Delete failed', 'error'); }
 }
 
 // ── API KEYS ─────────────────────────────────────────────────────────────────
