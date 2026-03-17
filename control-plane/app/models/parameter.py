@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Integer, Text, DateTime, Boolean, func
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -8,6 +8,7 @@ class CollectionParameter(Base):
     __tablename__ = "collection_parameter"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     display_label: Mapped[str] = mapped_column(Text, nullable=False)
     data_type: Mapped[str] = mapped_column(Text, nullable=False, default="text")

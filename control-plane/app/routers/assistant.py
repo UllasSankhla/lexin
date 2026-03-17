@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.assistant import AssistantConfig
 from app.schemas.assistant import AssistantConfigCreate, AssistantConfigUpdate, AssistantConfigResponse
 
@@ -11,21 +12,21 @@ router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
 
 @router.get("", response_model=AssistantConfigResponse)
-def get_assistant(db: Session = Depends(get_db)):
-    config = db.query(AssistantConfig).first()
+def get_assistant(owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    config = db.query(AssistantConfig).filter(AssistantConfig.owner_id == owner_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="No assistant configuration found")
     return config
 
 
 @router.put("", response_model=AssistantConfigResponse)
-def upsert_assistant(payload: AssistantConfigCreate, db: Session = Depends(get_db)):
-    config = db.query(AssistantConfig).first()
+def upsert_assistant(payload: AssistantConfigCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    config = db.query(AssistantConfig).filter(AssistantConfig.owner_id == owner_id).first()
     if config:
         for field, value in payload.model_dump().items():
             setattr(config, field, value)
     else:
-        config = AssistantConfig(**payload.model_dump())
+        config = AssistantConfig(owner_id=owner_id, **payload.model_dump())
         db.add(config)
     db.commit()
     db.refresh(config)
@@ -34,8 +35,8 @@ def upsert_assistant(payload: AssistantConfigCreate, db: Session = Depends(get_d
 
 
 @router.patch("", response_model=AssistantConfigResponse)
-def patch_assistant(payload: AssistantConfigUpdate, db: Session = Depends(get_db)):
-    config = db.query(AssistantConfig).first()
+def patch_assistant(payload: AssistantConfigUpdate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    config = db.query(AssistantConfig).filter(AssistantConfig.owner_id == owner_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="No assistant configuration found")
     for field, value in payload.model_dump(exclude_none=True).items():

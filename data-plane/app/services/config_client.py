@@ -12,10 +12,9 @@ logger = logging.getLogger(__name__)
 _cache: dict[str, tuple[dict, float]] = {}
 _cache_lock = asyncio.Lock()
 
-# Shared config cache (for all calls, not per-token)
-_shared_config: dict | None = None
-_shared_config_expiry: float = 0.0
-_shared_config_lock = asyncio.Lock()
+# Shared config cache: owner_id -> (config_dict, expiry_time)
+_owner_config_cache: dict[str, tuple[dict, float]] = {}
+_owner_config_lock = asyncio.Lock()
 
 
 async def get_cached_config(session_token: str) -> dict | None:
@@ -41,33 +40,40 @@ async def invalidate_token(session_token: str) -> None:
         _cache.pop(session_token, None)
 
 
-async def fetch_config_from_control_plane() -> dict:
-    """Fetch full config export from the control plane."""
-    global _shared_config, _shared_config_expiry
+async def fetch_config_from_control_plane(owner_id: str) -> dict:
+    """Fetch full config export from the control plane for a specific owner."""
+    async with _owner_config_lock:
+        entry = _owner_config_cache.get(owner_id)
+        if entry:
+            config, expiry = entry
+            if time.monotonic() < expiry:
+                return config
 
-    async with _shared_config_lock:
-        if _shared_config and time.monotonic() < _shared_config_expiry:
-            return _shared_config
-
-        headers = {
-            "X-API-Key": settings.control_plane_api_key,
-            "Accept": "application/json",
-        }
         url = f"{settings.control_plane_url}/api/v1/config/export"
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, headers=headers)
+                resp = await client.get(
+                    url,
+                    params={"owner_id": owner_id},
+                    headers={
+                        "x-api-key": settings.control_plane_api_key,
+                        "Accept": "application/json",
+                    },
+                )
                 resp.raise_for_status()
                 config = resp.json()
-                _shared_config = config
-                _shared_config_expiry = time.monotonic() + settings.config_cache_ttl_sec
-                logger.info("Fetched config from control plane (%d params, %d FAQs)",
-                            len(config.get("parameters", [])), len(config.get("faqs", [])))
+                _owner_config_cache[owner_id] = (config, time.monotonic() + settings.config_cache_ttl_sec)
+                logger.info(
+                    "Fetched config for owner=%s: %d params, %d FAQs",
+                    owner_id, len(config.get("parameters", [])), len(config.get("faqs", [])),
+                )
                 return config
         except httpx.HTTPError as e:
             logger.error("Failed to fetch config from control plane: %s", e)
-            if _shared_config:
-                logger.warning("Using stale cached config")
-                return _shared_config
+            # Fall back to stale cache if available
+            entry = _owner_config_cache.get(owner_id)
+            if entry:
+                logger.warning("Using stale cached config for owner=%s", owner_id)
+                return entry[0]
             raise

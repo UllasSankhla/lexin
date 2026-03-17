@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.webhook import WebhookEndpoint
 from app.schemas.webhook import WebhookEndpointCreate, WebhookEndpointUpdate, WebhookEndpointResponse
 
@@ -13,15 +14,15 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 
 @router.get("", response_model=list[WebhookEndpointResponse])
-def list_webhooks(db: Session = Depends(get_db)):
-    return db.query(WebhookEndpoint).all()
+def list_webhooks(owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    return db.query(WebhookEndpoint).filter(WebhookEndpoint.owner_id == owner_id).all()
 
 
 @router.post("", response_model=WebhookEndpointResponse, status_code=201)
-def create_webhook(payload: WebhookEndpointCreate, db: Session = Depends(get_db)):
+def create_webhook(payload: WebhookEndpointCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     data = payload.model_dump()
     data["events"] = json.dumps(data["events"])
-    webhook = WebhookEndpoint(**data)
+    webhook = WebhookEndpoint(owner_id=owner_id, **data)
     db.add(webhook)
     db.commit()
     db.refresh(webhook)
@@ -30,17 +31,17 @@ def create_webhook(payload: WebhookEndpointCreate, db: Session = Depends(get_db)
 
 
 @router.get("/{webhook_id}", response_model=WebhookEndpointResponse)
-def get_webhook(webhook_id: int, db: Session = Depends(get_db)):
+def get_webhook(webhook_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     webhook = db.get(WebhookEndpoint, webhook_id)
-    if not webhook:
+    if not webhook or webhook.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     return webhook
 
 
 @router.put("/{webhook_id}", response_model=WebhookEndpointResponse)
-def replace_webhook(webhook_id: int, payload: WebhookEndpointCreate, db: Session = Depends(get_db)):
+def replace_webhook(webhook_id: int, payload: WebhookEndpointCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     webhook = db.get(WebhookEndpoint, webhook_id)
-    if not webhook:
+    if not webhook or webhook.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     data = payload.model_dump()
     data["events"] = json.dumps(data["events"])
@@ -52,9 +53,9 @@ def replace_webhook(webhook_id: int, payload: WebhookEndpointCreate, db: Session
 
 
 @router.patch("/{webhook_id}", response_model=WebhookEndpointResponse)
-def patch_webhook(webhook_id: int, payload: WebhookEndpointUpdate, db: Session = Depends(get_db)):
+def patch_webhook(webhook_id: int, payload: WebhookEndpointUpdate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     webhook = db.get(WebhookEndpoint, webhook_id)
-    if not webhook:
+    if not webhook or webhook.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     data = payload.model_dump(exclude_none=True)
     if "events" in data:
@@ -67,18 +68,18 @@ def patch_webhook(webhook_id: int, payload: WebhookEndpointUpdate, db: Session =
 
 
 @router.delete("/{webhook_id}", status_code=204)
-def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
+def delete_webhook(webhook_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     webhook = db.get(WebhookEndpoint, webhook_id)
-    if not webhook:
+    if not webhook or webhook.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     db.delete(webhook)
     db.commit()
 
 
 @router.post("/{webhook_id}/test")
-async def test_webhook(webhook_id: int, db: Session = Depends(get_db)):
+async def test_webhook(webhook_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     webhook = db.get(WebhookEndpoint, webhook_id)
-    if not webhook:
+    if not webhook or webhook.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
 
     test_payload = {

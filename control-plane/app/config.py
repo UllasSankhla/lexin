@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     control_plane_api_key: str = "change-me-in-production"
     cors_origins: str = "http://localhost:3000,http://localhost:8001,http://localhost:5500"
 
+    supabase_url: str = "https://tnuwpzjppoumdmqovxwh.supabase.co"
+    supabase_anon_key: str = "sb_publishable_d8IvOhtAytM98FGkoyGqBw_JyCdOd9R"
+
     log_level: str = "INFO"
 
     class Config:

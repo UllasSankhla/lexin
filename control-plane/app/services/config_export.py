@@ -15,31 +15,31 @@ from app.services.file_storage import read_context_file
 logger = logging.getLogger(__name__)
 
 
-def build_config_export(db: Session) -> dict:
+def build_config_export(db: Session, owner_id: str) -> dict:
     """Assemble complete configuration payload for the data plane."""
 
-    assistant = db.query(AssistantConfig).first()
+    assistant = db.query(AssistantConfig).filter(AssistantConfig.owner_id == owner_id).first()
     if not assistant:
         return {"error": "No assistant configuration found"}
 
     parameters = (
         db.query(CollectionParameter)
+        .filter(CollectionParameter.owner_id == owner_id)
         .order_by(CollectionParameter.collection_order)
         .all()
     )
 
-    faqs = db.query(FAQ).filter(FAQ.enabled == True).all()  # noqa
+    faqs = db.query(FAQ).filter(FAQ.owner_id == owner_id, FAQ.enabled == True).all()  # noqa
 
-    context_files = db.query(ContextFile).filter(ContextFile.enabled == True).all()  # noqa
+    context_files = db.query(ContextFile).filter(ContextFile.owner_id == owner_id, ContextFile.enabled == True).all()  # noqa
 
-    spell_rules = db.query(SpellRule).filter(SpellRule.enabled == True).all()  # noqa
+    spell_rules = db.query(SpellRule).filter(SpellRule.owner_id == owner_id, SpellRule.enabled == True).all()  # noqa
 
-    webhooks = db.query(WebhookEndpoint).filter(WebhookEndpoint.enabled == True).all()  # noqa
+    webhooks = db.query(WebhookEndpoint).filter(WebhookEndpoint.owner_id == owner_id, WebhookEndpoint.enabled == True).all()  # noqa
 
-    calendly_config = db.query(CalendlyConfig).filter(CalendlyConfig.enabled == True).first()  # noqa
+    calendly_config = db.query(CalendlyConfig).filter(CalendlyConfig.owner_id == owner_id, CalendlyConfig.enabled == True).first()  # noqa
     calendly_event_types = db.query(CalendlyEventType).filter(CalendlyEventType.enabled == True).all()  # noqa
 
-    # Read and inline context file content
     context_content = []
     for cf in context_files:
         content = read_context_file(cf.file_path)
@@ -98,7 +98,6 @@ def build_config_export(db: Session) -> dict:
             }
             for w in webhooks
         ],
-        # Calendly integration — None when not configured / disabled
         "calendly": {
             "api_token": calendly_config.api_token,
             "user_uri": calendly_config.user_uri,
@@ -118,9 +117,7 @@ def build_config_export(db: Session) -> dict:
     }
 
     logger.info(
-        "Config export built: %d params, %d FAQs, %d context files, %d webhooks, "
-        "calendly=%s, %d event_types",
-        len(parameters), len(faqs), len(context_files), len(webhooks),
-        "enabled" if calendly_config else "disabled", len(calendly_event_types),
+        "Config export built for owner=%s: %d params, %d FAQs, %d context files, %d webhooks",
+        owner_id, len(parameters), len(faqs), len(context_files), len(webhooks),
     )
     return export

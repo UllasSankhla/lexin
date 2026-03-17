@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.context_file import ContextFile
 from app.schemas.context_file import ContextFileResponse, ContextFileUpdate
 from app.services.file_storage import save_context_file, delete_context_file
@@ -14,18 +15,19 @@ router = APIRouter(prefix="/api/v1/context-files", tags=["context-files"])
 
 
 @router.get("", response_model=list[ContextFileResponse])
-def list_context_files(db: Session = Depends(get_db)):
-    return db.query(ContextFile).all()
+def list_context_files(owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    return db.query(ContextFile).filter(ContextFile.owner_id == owner_id).all()
 
 
 @router.post("", response_model=ContextFileResponse, status_code=201)
 async def upload_context_file(
     file: UploadFile = File(...),
     description: str | None = None,
+    owner_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     metadata = await save_context_file(file)
-    cf = ContextFile(**metadata, description=description)
+    cf = ContextFile(owner_id=owner_id, **metadata, description=description)
     db.add(cf)
     db.commit()
     db.refresh(cf)
@@ -34,17 +36,17 @@ async def upload_context_file(
 
 
 @router.get("/{file_id}", response_model=ContextFileResponse)
-def get_context_file(file_id: int, db: Session = Depends(get_db)):
+def get_context_file(file_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     cf = db.get(ContextFile, file_id)
-    if not cf:
+    if not cf or cf.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Context file not found")
     return cf
 
 
 @router.get("/{file_id}/download")
-def download_context_file(file_id: int, db: Session = Depends(get_db)):
+def download_context_file(file_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     cf = db.get(ContextFile, file_id)
-    if not cf:
+    if not cf or cf.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Context file not found")
     path = Path(cf.file_path)
     if not path.exists():
@@ -53,9 +55,9 @@ def download_context_file(file_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{file_id}", response_model=ContextFileResponse)
-def update_context_file(file_id: int, payload: ContextFileUpdate, db: Session = Depends(get_db)):
+def update_context_file(file_id: int, payload: ContextFileUpdate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     cf = db.get(ContextFile, file_id)
-    if not cf:
+    if not cf or cf.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Context file not found")
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(cf, field, value)
@@ -65,9 +67,9 @@ def update_context_file(file_id: int, payload: ContextFileUpdate, db: Session = 
 
 
 @router.delete("/{file_id}", status_code=204)
-def delete_context_file_endpoint(file_id: int, db: Session = Depends(get_db)):
+def delete_context_file_endpoint(file_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     cf = db.get(ContextFile, file_id)
-    if not cf:
+    if not cf or cf.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Context file not found")
     file_path = cf.file_path
     db.delete(cf)

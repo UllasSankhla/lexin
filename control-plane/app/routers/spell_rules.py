@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.spell_rule import SpellRule
 from app.schemas.spell_rule import SpellRuleCreate, SpellRuleUpdate, SpellRuleImport, SpellRuleResponse
 
@@ -11,13 +12,13 @@ router = APIRouter(prefix="/api/v1/spell-rules", tags=["spell-rules"])
 
 
 @router.get("", response_model=list[SpellRuleResponse])
-def list_spell_rules(db: Session = Depends(get_db)):
-    return db.query(SpellRule).all()
+def list_spell_rules(owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    return db.query(SpellRule).filter(SpellRule.owner_id == owner_id).all()
 
 
 @router.post("", response_model=SpellRuleResponse, status_code=201)
-def create_spell_rule(payload: SpellRuleCreate, db: Session = Depends(get_db)):
-    rule = SpellRule(**payload.model_dump())
+def create_spell_rule(payload: SpellRuleCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    rule = SpellRule(owner_id=owner_id, **payload.model_dump())
     db.add(rule)
     db.commit()
     db.refresh(rule)
@@ -25,17 +26,17 @@ def create_spell_rule(payload: SpellRuleCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{rule_id}", response_model=SpellRuleResponse)
-def get_spell_rule(rule_id: int, db: Session = Depends(get_db)):
+def get_spell_rule(rule_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     rule = db.get(SpellRule, rule_id)
-    if not rule:
+    if not rule or rule.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Spell rule not found")
     return rule
 
 
 @router.put("/{rule_id}", response_model=SpellRuleResponse)
-def replace_spell_rule(rule_id: int, payload: SpellRuleCreate, db: Session = Depends(get_db)):
+def replace_spell_rule(rule_id: int, payload: SpellRuleCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     rule = db.get(SpellRule, rule_id)
-    if not rule:
+    if not rule or rule.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Spell rule not found")
     for field, value in payload.model_dump().items():
         setattr(rule, field, value)
@@ -45,19 +46,19 @@ def replace_spell_rule(rule_id: int, payload: SpellRuleCreate, db: Session = Dep
 
 
 @router.delete("/{rule_id}", status_code=204)
-def delete_spell_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_spell_rule(rule_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     rule = db.get(SpellRule, rule_id)
-    if not rule:
+    if not rule or rule.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Spell rule not found")
     db.delete(rule)
     db.commit()
 
 
 @router.post("/import", response_model=list[SpellRuleResponse], status_code=201)
-def import_spell_rules(payload: SpellRuleImport, db: Session = Depends(get_db)):
+def import_spell_rules(payload: SpellRuleImport, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     created = []
     for rule_data in payload.rules:
-        rule = SpellRule(**rule_data.model_dump())
+        rule = SpellRule(owner_id=owner_id, **rule_data.model_dump())
         db.add(rule)
         created.append(rule)
     db.commit()

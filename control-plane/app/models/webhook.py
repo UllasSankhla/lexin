@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Integer, Text, DateTime, Boolean, func
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -8,6 +8,7 @@ class WebhookEndpoint(Base):
     __tablename__ = "webhook_endpoint"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     secret_header: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Integer, Text, DateTime, func
+from sqlalchemy import Integer, String, Text, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -8,6 +8,7 @@ class AssistantConfig(Base):
     __tablename__ = "assistant_config"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     persona_name: Mapped[str] = mapped_column(Text, nullable=False, default="Aria")
     persona_voice: Mapped[str] = mapped_column(Text, nullable=False, default="aura-2-thalia-en")
     nature: Mapped[str] = mapped_column(Text, nullable=False, default="friendly")

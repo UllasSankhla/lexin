@@ -299,8 +299,23 @@
     main { padding: 16px; }
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
+
+<!-- Login overlay — shown when no session exists -->
+<div id="login-overlay" style="display:none; position:fixed; inset:0; background:#f0f2f5; z-index:9999; display:flex; align-items:center; justify-content:center;">
+  <div style="background:white; border-radius:16px; padding:48px 40px; width:360px; box-shadow:0 8px 40px rgba(0,0,0,0.12);">
+    <h2 style="margin:0 0 8px; font-size:24px; color:#1a1a2e;">Admin Console</h2>
+    <p style="margin:0 0 28px; color:#666; font-size:14px;">Sign in to manage your voice assistant</p>
+    <div id="login-error" style="display:none; background:#fff0f0; border:1px solid #ffcccc; border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:13px; color:#c0392b;"></div>
+    <label style="font-size:13px; color:#555; display:block; margin-bottom:4px;">Email</label>
+    <input id="login-email" type="email" placeholder="you@example.com" style="width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; margin-bottom:12px; box-sizing:border-box; outline:none;" />
+    <label style="font-size:13px; color:#555; display:block; margin-bottom:4px;">Password</label>
+    <input id="login-password" type="password" placeholder="••••••••" style="width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; margin-bottom:20px; box-sizing:border-box; outline:none;" />
+    <button id="login-btn" onclick="doLogin()" style="width:100%; padding:12px; background:#4F46E5; color:white; border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer;">Sign In</button>
+  </div>
+</div>
 
 <!-- ── HEADER ── -->
 <header>
@@ -364,6 +379,7 @@
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     Settings
   </button>
+  <button onclick="doLogout()" style="background:transparent; border:1px solid rgba(0,0,0,0.15); color:var(--gray-600); padding:6px 14px; border-radius:8px; font-size:13px; cursor:pointer; margin-left:12px;">Sign Out</button>
 </header>
 
 <!-- ── MAIN ── -->
@@ -815,10 +831,6 @@
       <input type="text" id="settingsDpUrl" placeholder="http://localhost:8001">
       <span style="font-size:12px;color:var(--gray-400);margin-top:3px">Call recording service</span>
     </div>
-    <div class="form-group">
-      <label>API Key <span class="label-hint">(leave blank in development)</span></label>
-      <input type="password" id="settingsApiKey" placeholder="Optional">
-    </div>
     <div id="settingsStatus" style="font-size:13px;color:var(--gray-500)"></div>
   </div>
   <div class="settings-panel-footer">
@@ -830,16 +842,80 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
+// ── Supabase Auth ────────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://tnuwpzjppoumdmqovxwh.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_d8IvOhtAytM98FGkoyGqBw_JyCdOd9R';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let currentSession = null;
+
+async function initAuth() {
+  const { data: { session } } = await supabase.auth.getSession();
+  currentSession = session;
+  if (!session) {
+    showLoginOverlay();
+    return;
+  }
+  hideLoginOverlay();
+  loadDashboard();
+}
+
+function showLoginOverlay() {
+  document.getElementById('login-overlay').style.display = 'flex';
+}
+
+function hideLoginOverlay() {
+  document.getElementById('login-overlay').style.display = 'none';
+}
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  const btn = document.getElementById('login-btn');
+
+  errEl.style.display = 'none';
+  btn.textContent = 'Signing in...';
+  btn.disabled = true;
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+  btn.textContent = 'Sign In';
+  btn.disabled = false;
+
+  if (error) {
+    errEl.textContent = error.message;
+    errEl.style.display = 'block';
+    return;
+  }
+
+  currentSession = data.session;
+  hideLoginOverlay();
+  loadDashboard();
+}
+
+async function doLogout() {
+  await supabase.auth.signOut();
+  currentSession = null;
+  showLoginOverlay();
+}
+
+function getAuthHeaders() {
+  if (currentSession) {
+    return { 'Authorization': `Bearer ${currentSession.access_token}`, 'Content-Type': 'application/json' };
+  }
+  // Fallback for backwards compat
+  return { 'Content-Type': 'application/json' };
+}
+
 // ── CONFIG ──────────────────────────────────────────────────────────────────
 let CP = localStorage.getItem('cp_url') || 'http://localhost:8000';
 let DP = localStorage.getItem('dp_url') || 'http://localhost:8001';
-let API_KEY = localStorage.getItem('api_key') || '';
 
 // ── SETTINGS ────────────────────────────────────────────────────────────────
 function openSettings() {
   document.getElementById('settingsCpUrl').value = CP;
   document.getElementById('settingsDpUrl').value = DP;
-  document.getElementById('settingsApiKey').value = API_KEY;
   document.getElementById('settingsOverlay').classList.add('open');
   document.getElementById('settingsPanel').classList.add('open');
 }
@@ -850,10 +926,8 @@ function closeSettings() {
 function saveSettings() {
   CP = document.getElementById('settingsCpUrl').value.replace(/\/$/, '') || 'http://localhost:8000';
   DP = document.getElementById('settingsDpUrl').value.replace(/\/$/, '') || 'http://localhost:8001';
-  API_KEY = document.getElementById('settingsApiKey').value;
   localStorage.setItem('cp_url', CP);
   localStorage.setItem('dp_url', DP);
-  localStorage.setItem('api_key', API_KEY);
   closeSettings();
   toast('Settings saved', 'success');
   loadCurrentPage();
@@ -907,8 +981,7 @@ function loadCurrentPage() {
 
 // ── API HELPERS ──────────────────────────────────────────────────────────────
 async function apiFetch(base, path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  if (API_KEY) headers['X-API-Key'] = API_KEY;
+  const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
   if (options.body && typeof options.body !== 'string' && !(options.body instanceof FormData)) {
     options.body = JSON.stringify(options.body);
   }
@@ -1351,8 +1424,8 @@ async function uploadContextFile(file) {
   const desc = document.getElementById('fileDescription').value.trim();
   if (desc) formData.append('description', desc);
   try {
-    const headers = {};
-    if (API_KEY) headers['X-API-Key'] = API_KEY;
+    const headers = { ...getAuthHeaders() };
+    delete headers['Content-Type']; // let browser set multipart boundary
     const res = await fetch(CP + '/api/v1/context-files', { method: 'POST', headers, body: formData });
     if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
     toast('File uploaded!', 'success');
@@ -1538,7 +1611,7 @@ async function toggleSpellRule(id, enabled) {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
-loadDashboard();
+initAuth();
 </script>
 </body>
 </html>

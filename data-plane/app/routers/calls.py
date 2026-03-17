@@ -42,14 +42,12 @@ def _format_call(record: CallRecord) -> dict:
 async def initiate_call(
     request: Request,
     db: Session = Depends(get_db),
-    customer_name: str = Depends(require_customer_key),
+    customer_auth: tuple[str, str] = Depends(require_customer_key),
 ):
-    """
-    Pre-flight endpoint. Widget calls this before opening WebSocket.
-    Requires X-Customer-Key header. Returns session_token and WebSocket URL.
-    """
+    customer_name, owner_id = customer_auth
+
     try:
-        config = await fetch_config_from_control_plane()
+        config = await fetch_config_from_control_plane(owner_id)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Configuration unavailable: {e}")
 
@@ -72,14 +70,12 @@ async def initiate_call(
 
     await set_cached_config(session_token, config)
 
-    # Build WebSocket URL — respect X-Forwarded-Proto/Host set by nginx so
-    # the URL is correct whether running locally or behind an HTTPS proxy.
     forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
-    forwarded_host  = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.hostname))
+    forwarded_host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.hostname))
     ws_scheme = "wss" if forwarded_proto == "https" else "ws"
     ws_url = f"{ws_scheme}://{forwarded_host}/ws/call?token={session_token}"
 
-    logger.info("Call initiated: call_id=%s customer=%r token=%s...", call_id, customer_name, session_token[:8])
+    logger.info("Call initiated: call_id=%s customer=%r owner=%s token=%s...", call_id, customer_name, owner_id, session_token[:8])
     return {
         "call_id": call_id,
         "session_token": session_token,

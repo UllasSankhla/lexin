@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Integer, Text, DateTime, Boolean, func
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -8,6 +8,7 @@ class SpellRule(Base):
     __tablename__ = "spell_rule"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     wrong_form: Mapped[str] = mapped_column(Text, nullable=False)
     correct_form: Mapped[str] = mapped_column(Text, nullable=False)
     rule_type: Mapped[str] = mapped_column(Text, nullable=False, default="substitution")

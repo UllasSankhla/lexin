@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.calendly_config import CalendlyConfig
 from app.models.calendly_event_type import CalendlyEventType
 from app.schemas.calendly import (
@@ -20,22 +21,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/calendly", tags=["calendly"])
 
 
-# ── CalendlyConfig (singleton) ────────────────────────────────────────────────
+# ── CalendlyConfig (singleton per owner) ─────────────────────────────────────
 
 @router.get("/config", response_model=CalendlyConfigResponse | None)
-def get_calendly_config(db: Session = Depends(get_db)):
-    return db.query(CalendlyConfig).first()
+def get_calendly_config(owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    return db.query(CalendlyConfig).filter(CalendlyConfig.owner_id == owner_id).first()
 
 
 @router.put("/config", response_model=CalendlyConfigResponse)
-def upsert_calendly_config(body: CalendlyConfigCreate, db: Session = Depends(get_db)):
-    """Create or fully replace the Calendly configuration (singleton)."""
-    config = db.query(CalendlyConfig).first()
+def upsert_calendly_config(body: CalendlyConfigCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create or fully replace the Calendly configuration (singleton per owner)."""
+    config = db.query(CalendlyConfig).filter(CalendlyConfig.owner_id == owner_id).first()
     if config:
         for key, value in body.model_dump().items():
             setattr(config, key, value)
     else:
-        config = CalendlyConfig(**body.model_dump())
+        config = CalendlyConfig(owner_id=owner_id, **body.model_dump())
         db.add(config)
     db.commit()
     db.refresh(config)
@@ -44,8 +45,8 @@ def upsert_calendly_config(body: CalendlyConfigCreate, db: Session = Depends(get
 
 
 @router.patch("/config", response_model=CalendlyConfigResponse)
-def patch_calendly_config(body: CalendlyConfigUpdate, db: Session = Depends(get_db)):
-    config = db.query(CalendlyConfig).first()
+def patch_calendly_config(body: CalendlyConfigUpdate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    config = db.query(CalendlyConfig).filter(CalendlyConfig.owner_id == owner_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="No Calendly config found; use PUT to create one")
     for key, value in body.model_dump(exclude_none=True).items():
@@ -58,7 +59,7 @@ def patch_calendly_config(body: CalendlyConfigUpdate, db: Session = Depends(get_
 # ── CalendlyEventType (list) ──────────────────────────────────────────────────
 
 @router.get("/event-types", response_model=list[CalendlyEventTypeResponse])
-def list_event_types(enabled: bool | None = None, db: Session = Depends(get_db)):
+def list_event_types(enabled: bool | None = None, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(CalendlyEventType)
     if enabled is not None:
         q = q.filter(CalendlyEventType.enabled == enabled)
@@ -66,7 +67,7 @@ def list_event_types(enabled: bool | None = None, db: Session = Depends(get_db))
 
 
 @router.post("/event-types", response_model=CalendlyEventTypeResponse, status_code=201)
-def create_event_type(body: CalendlyEventTypeCreate, db: Session = Depends(get_db)):
+def create_event_type(body: CalendlyEventTypeCreate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     et = CalendlyEventType(**body.model_dump())
     db.add(et)
     db.commit()
@@ -76,7 +77,7 @@ def create_event_type(body: CalendlyEventTypeCreate, db: Session = Depends(get_d
 
 
 @router.patch("/event-types/{event_type_id}", response_model=CalendlyEventTypeResponse)
-def update_event_type(event_type_id: int, body: CalendlyEventTypeUpdate, db: Session = Depends(get_db)):
+def update_event_type(event_type_id: int, body: CalendlyEventTypeUpdate, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     et = db.get(CalendlyEventType, event_type_id)
     if not et:
         raise HTTPException(status_code=404, detail="Event type not found")
@@ -88,7 +89,7 @@ def update_event_type(event_type_id: int, body: CalendlyEventTypeUpdate, db: Ses
 
 
 @router.delete("/event-types/{event_type_id}", status_code=204)
-def delete_event_type(event_type_id: int, db: Session = Depends(get_db)):
+def delete_event_type(event_type_id: int, owner_id: str = Depends(get_current_user), db: Session = Depends(get_db)):
     et = db.get(CalendlyEventType, event_type_id)
     if not et:
         raise HTTPException(status_code=404, detail="Event type not found")
