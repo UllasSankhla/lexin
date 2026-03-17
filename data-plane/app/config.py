@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     control_plane_url: str = "http://localhost:8000"
     control_plane_api_key: str = "change-me-in-production"
-    config_cache_ttl_sec: int = 300
+    config_cache_ttl_sec: int = 30
 
     deepgram_api_key: str = ""
     deepgram_stt_model: str = "flux-general-en"
