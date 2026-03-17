@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     system_prompts_path: str = "./storage/system_prompts"
     max_context_file_size_mb: int = 10
 
-    api_key: str = "change-me-in-production"
+    control_plane_api_key: str = "change-me-in-production"
     cors_origins: str = "http://localhost:3000,http://localhost:8001,http://localhost:5500"
 
     log_level: str = "INFO"

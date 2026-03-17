@@ -15,7 +15,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         api_key = request.headers.get("X-API-Key")
-        if api_key != settings.api_key:
+        if api_key != settings.control_plane_api_key:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
         return await call_next(request)
