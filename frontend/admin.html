@@ -845,12 +845,20 @@
 // ── Supabase Auth ────────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://tnuwpzjppoumdmqovxwh.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_d8IvOhtAytM98FGkoyGqBw_JyCdOd9R';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Lazy init — avoids crash if CDN script hasn't executed yet at parse time
+let _supabaseClient = null;
+function getClient() {
+  if (!_supabaseClient) {
+    _supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  }
+  return _supabaseClient;
+}
 
 let currentSession = null;
 
 async function initAuth() {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await getClient().auth.getSession();
   currentSession = session;
   if (!session) {
     showLoginOverlay();
@@ -878,7 +886,7 @@ async function doLogin() {
   btn.textContent = 'Signing in...';
   btn.disabled = true;
 
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await getClient().auth.signInWithPassword({ email, password });
 
   btn.textContent = 'Sign In';
   btn.disabled = false;
@@ -895,7 +903,7 @@ async function doLogin() {
 }
 
 async function doLogout() {
-  await supabase.auth.signOut();
+  await getClient().auth.signOut();
   currentSession = null;
   showLoginOverlay();
 }
