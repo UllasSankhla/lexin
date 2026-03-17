@@ -245,8 +245,19 @@ server {
 
     # Regular REST endpoints (call initiate, stats, etc.)
     location /api/ {
+        if (\$request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin * always;
+            add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+            add_header Access-Control-Allow-Headers "Content-Type, X-Customer-Key" always;
+            add_header Access-Control-Max-Age 86400 always;
+            add_header Content-Length 0;
+            return 204;
+        }
         proxy_pass http://127.0.0.1:8001;
         proxy_read_timeout 30s;
+        proxy_hide_header Access-Control-Allow-Origin;
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Headers "Content-Type, X-Customer-Key" always;
     }
 
     # WebSocket — voice calls (long-lived connections)
