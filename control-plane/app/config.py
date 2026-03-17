@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:8001,http://localhost:5500"
 
     supabase_url: str = "https://tnuwpzjppoumdmqovxwh.supabase.co"
-    supabase_anon_key: str = "sb_publishable_d8IvOhtAytM98FGkoyGqBw_JyCdOd9R"
+    supabase_anon_key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudXdwempwcG91bWRtcW92eHdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3NzM5MjMsImV4cCI6MjA4OTM0OTkyM30.N5W6y2x3CU6cxJ8XYFIMyT9b__0LFzLzj2Siikg9hk0"
 
     log_level: str = "INFO"
 
