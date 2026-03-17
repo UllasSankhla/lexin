@@ -917,8 +917,8 @@ function getAuthHeaders() {
 }
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────
-let CP = localStorage.getItem('cp_url') || 'http://localhost:8000';
-let DP = localStorage.getItem('dp_url') || 'http://localhost:8001';
+let CP = localStorage.getItem('cp_url') || (location.hostname === 'localhost' ? 'http://localhost:8000' : `https://${location.hostname}`);
+let DP = localStorage.getItem('dp_url') || (location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://voice.lexinflow.com');
 
 // ── SETTINGS ────────────────────────────────────────────────────────────────
 function openSettings() {
