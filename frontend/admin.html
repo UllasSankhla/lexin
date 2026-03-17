@@ -999,8 +999,9 @@ function getAuthHeaders() {
 }
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────
-let CP = localStorage.getItem('cp_url') || (location.hostname === 'localhost' ? 'http://localhost:8000' : `https://${location.hostname}`);
-let DP = localStorage.getItem('dp_url') || (location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://voice.lexinflow.com');
+const _isLocal = location.hostname === 'localhost';
+let CP = localStorage.getItem('cp_url') || (_isLocal ? 'http://localhost:8000' : `https://${location.hostname}`);
+let DP = localStorage.getItem('dp_url') || (_isLocal ? 'http://localhost:8001' : 'https://voice.lexinflow.com');
 
 // ── SETTINGS ────────────────────────────────────────────────────────────────
 function openSettings() {
@@ -1797,8 +1798,9 @@ async function loadTest() {
 
 function openDemo(e) {
   const key = document.getElementById('embedKeySelect').value;
-  const demoUrl = DP + '/demo.html' + (key ? '?key=' + encodeURIComponent(key) : '');
-  e.currentTarget.href = demoUrl;
+  const params = new URLSearchParams({ voice_url: DP });
+  if (key) params.set('key', key);
+  e.currentTarget.href = '/static/demo.html?' + params.toString();
 }
 
 function renderEmbed() {
@@ -1807,7 +1809,7 @@ function renderEmbed() {
   if (!key) { pre.textContent = 'Select a key above to generate the snippet.'; return; }
   pre.textContent = `<script
   src="${DP}/booking-widget.js"
-  data-voice-url="${DP}"
+  data-api-url="${DP}"
   data-customer-key="${key}"
 ><\/script>`;
 }

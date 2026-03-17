@@ -144,19 +144,27 @@
   </div>
 
   <script>
+    const DEFAULT_VOICE_URL = location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://voice.lexinflow.com';
+
+    // Read URL params — allow admin console to pre-fill via ?key=...&voice_url=...
+    const _params = new URLSearchParams(location.search);
+    const _initKey = _params.get('key') || '';
+    const _initUrl = _params.get('voice_url') || DEFAULT_VOICE_URL;
+
+    document.getElementById('cfg-api-url').value = _initUrl;
+    if (_initKey) document.getElementById('cfg-customer-key').value = _initKey;
+
     function reloadWidget() {
       const apiUrl = document.getElementById('cfg-api-url').value;
       const customerKey = document.getElementById('cfg-customer-key').value;
       const color = document.getElementById('cfg-color').value;
       const label = document.getElementById('cfg-label').value;
 
-      // Remove existing widget
       const existing = document.getElementById('booking-widget-host');
       if (existing) existing.remove();
       const existingScript = document.getElementById('widget-script');
       if (existingScript) existingScript.remove();
 
-      // Re-inject
       const script = document.createElement('script');
       script.id = 'widget-script';
       script.src = 'booking-widget.js';
@@ -167,18 +175,9 @@
       script.dataset.debug = 'true';
       document.body.appendChild(script);
     }
-  </script>
 
-  <!-- Auto-load widget with default config -->
-  <script
-    src="booking-widget.js"
-    data-api-url="http://localhost:8001"
-    data-customer-key="ck_live_359b05dfdffaf61eed7e51f1c34365c4e900ee1c"
-    data-theme="light"
-    data-position="bottom-right"
-    data-primary-color="#4F46E5"
-    data-button-label="Book Appointment"
-    data-debug="true"
-  ></script>
+    // Auto-load on page open
+    reloadWidget();
+  </script>
 </body>
 </html>
