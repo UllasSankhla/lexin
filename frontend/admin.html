@@ -370,6 +370,16 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         Notifications
       </div>
+      <hr class="nav-divider">
+      <div class="nav-section-label">Deploy</div>
+      <div class="nav-item" data-page="apikeys" onclick="navigate('apikeys')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        API Keys
+      </div>
+      <div class="nav-item" data-page="test" onclick="navigate('test')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Test Agent
+      </div>
     </div>
   </div>
 
@@ -609,6 +619,56 @@
     </div>
   </section>
 
+  <!-- API KEYS -->
+  <section class="page" id="page-apikeys">
+    <div class="page-header">
+      <h1>API Keys</h1>
+      <p>Generate keys to authenticate your embedded voice widget. Each key is tied to your account.</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Your API Keys</span>
+        <button class="btn btn-primary btn-sm" onclick="openKeyModal()">+ Generate Key</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Created</th><th></th></tr></thead>
+          <tbody id="keyBody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- TEST AGENT -->
+  <section class="page" id="page-test">
+    <div class="page-header">
+      <h1>Test Agent</h1>
+      <p>Try out your voice agent in a live demo, or grab the embed snippet for your website.</p>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><span class="card-title">Live Demo</span></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+        <p style="color:var(--gray-600);font-size:14px">Opens the demo page in a new tab. Make sure you have at least one API key generated and your assistant configured.</p>
+        <div>
+          <a id="demoLink" href="#" target="_blank" class="btn btn-primary" onclick="openDemo(event)">Open Demo Page</a>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Embed Snippet</span></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+        <p style="color:var(--gray-600);font-size:14px">Add this to your website's <code style="background:var(--gray-100);padding:2px 5px;border-radius:3px">&lt;body&gt;</code>. Select an API key first:</p>
+        <div style="display:flex;gap:10px;align-items:center">
+          <select id="embedKeySelect" style="flex:1;padding:8px 10px;border:1px solid var(--gray-200);border-radius:6px;font-size:14px" onchange="renderEmbed()">
+            <option value="">— select a key —</option>
+          </select>
+        </div>
+        <pre id="embedSnippet" style="background:var(--gray-900);color:#e2e8f0;padding:16px;border-radius:8px;font-size:12px;overflow-x:auto;white-space:pre-wrap;line-height:1.6">Select a key above to generate the snippet.</pre>
+        <button class="btn btn-secondary btn-sm" style="align-self:flex-start" onclick="copyEmbed()">Copy Snippet</button>
+      </div>
+    </div>
+  </section>
+
   <!-- WEBHOOKS -->
   <section class="page" id="page-webhooks">
     <div class="page-header">
@@ -813,6 +873,28 @@
   </div>
 </div>
 
+<!-- API Key Modal -->
+<div class="modal-overlay" id="keyModal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">Generate API Key</span>
+      <button class="modal-close" onclick="closeModal('keyModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="keyForm" onsubmit="saveKey(event)">
+        <div class="form-group">
+          <label>Key Name <span class="label-hint">e.g. "My Website", "Demo Widget"</span></label>
+          <input type="text" id="kName" required placeholder="e.g. Production Widget" maxlength="128">
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('keyModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('keyForm').requestSubmit()">Generate</button>
+    </div>
+  </div>
+</div>
+
 <!-- Settings Panel -->
 <div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>
 <div class="settings-panel" id="settingsPanel">
@@ -945,7 +1027,8 @@ function saveSettings() {
 const PAGE_TITLES = {
   dashboard: 'Dashboard', calls: 'Calls & Transcripts', assistant: 'AI Assistant',
   parameters: 'Info to Collect', faqs: 'FAQs', context: 'Knowledge Files',
-  spellrules: 'Name Corrections', webhooks: 'Notifications'
+  spellrules: 'Name Corrections', webhooks: 'Notifications',
+  apikeys: 'API Keys', test: 'Test Agent'
 };
 let currentPage = 'dashboard';
 
@@ -983,6 +1066,8 @@ function loadCurrentPage() {
     context: loadContextFiles,
     spellrules: loadSpellRules,
     webhooks: loadWebhooks,
+    apikeys: loadApiKeys,
+    test: loadTest,
   };
   loaders[currentPage]?.();
 }
@@ -1619,6 +1704,118 @@ async function toggleSpellRule(id, enabled) {
     await cp('/api/v1/spell-rules/' + id, { method: 'PUT', body: { wrong_form: r.wrong_form, correct_form: r.correct_form, rule_type: r.rule_type, enabled } });
     toast(enabled ? 'Rule enabled' : 'Rule disabled', 'success');
   } catch(e) { toast('Update failed: ' + e.message, 'error'); loadSpellRules(); }
+}
+
+// ── API KEYS ─────────────────────────────────────────────────────────────────
+let _cachedKeys = [];
+
+async function loadApiKeys() {
+  const body = document.getElementById('keyBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="5"><span class="spinner"></span></td></tr>';
+  try {
+    const keys = await cp('/api/v1/customer-keys');
+    _cachedKeys = keys;
+    populateKeySelect(keys);
+    if (!keys.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No keys yet — generate one above</td></tr>'; return; }
+    body.innerHTML = keys.map(k => `
+      <tr>
+        <td><strong>${esc(k.name)}</strong></td>
+        <td style="font-family:monospace;font-size:12px">
+          <span id="kv-${k.id}">${maskKey(k.key)}</span>
+          <button class="btn btn-sm btn-secondary" style="margin-left:6px" onclick="toggleKeyVisibility(${k.id},'${esc(k.key)}')">Show</button>
+          <button class="btn btn-sm btn-secondary" style="margin-left:4px" onclick="copyText('${esc(k.key)}')">Copy</button>
+        </td>
+        <td>
+          <label class="toggle"><input type="checkbox" ${k.enabled?'checked':''} onchange="toggleApiKey(${k.id},this.checked)"><span class="toggle-slider"></span></label>
+        </td>
+        <td style="font-size:12px;color:var(--gray-500)">${fmtDate(k.created_at)}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteApiKey(${k.id})">Delete</button></td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="5" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function maskKey(key) { return key.slice(0, 10) + '••••••••••••••••'; }
+
+function toggleKeyVisibility(id, fullKey) {
+  const el = document.getElementById('kv-' + id);
+  const btn = el.nextElementSibling;
+  if (btn.textContent === 'Show') { el.textContent = fullKey; btn.textContent = 'Hide'; }
+  else { el.textContent = maskKey(fullKey); btn.textContent = 'Show'; }
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => toast('Copied!', 'success')).catch(() => toast('Copy failed', 'error'));
+}
+
+function openKeyModal() {
+  document.getElementById('keyForm').reset();
+  openModal('keyModal');
+}
+
+async function saveKey(e) {
+  e.preventDefault();
+  try {
+    await cp('/api/v1/customer-keys', { method: 'POST', body: { name: document.getElementById('kName').value, enabled: true } });
+    toast('Key generated!', 'success');
+    closeModal('keyModal');
+    loadApiKeys();
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function toggleApiKey(id, enabled) {
+  try {
+    await cp('/api/v1/customer-keys/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'Key enabled' : 'Key disabled', 'success');
+  } catch(e) { toast('Update failed', 'error'); loadApiKeys(); }
+}
+
+async function deleteApiKey(id) {
+  if (!confirm('Delete this API key? Any widgets using it will stop working.')) return;
+  try {
+    await cp('/api/v1/customer-keys/' + id, { method: 'DELETE' });
+    toast('Key deleted', 'success');
+    loadApiKeys();
+  } catch(e) { toast('Delete failed', 'error'); }
+}
+
+function populateKeySelect(keys) {
+  const sel = document.getElementById('embedKeySelect');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select a key —</option>' + keys.map(k => `<option value="${esc(k.key)}">${esc(k.name)}</option>`).join('');
+  if (prev) sel.value = prev;
+  renderEmbed();
+}
+
+// ── TEST AGENT ────────────────────────────────────────────────────────────────
+async function loadTest() {
+  if (!_cachedKeys.length) {
+    try { _cachedKeys = await cp('/api/v1/customer-keys'); } catch(_) {}
+  }
+  populateKeySelect(_cachedKeys);
+}
+
+function openDemo(e) {
+  const key = document.getElementById('embedKeySelect').value;
+  const demoUrl = DP + '/demo.html' + (key ? '?key=' + encodeURIComponent(key) : '');
+  e.currentTarget.href = demoUrl;
+}
+
+function renderEmbed() {
+  const key = document.getElementById('embedKeySelect').value;
+  const pre = document.getElementById('embedSnippet');
+  if (!key) { pre.textContent = 'Select a key above to generate the snippet.'; return; }
+  pre.textContent = `<script
+  src="${DP}/booking-widget.js"
+  data-voice-url="${DP}"
+  data-customer-key="${key}"
+><\/script>`;
+}
+
+function copyEmbed() {
+  const text = document.getElementById('embedSnippet').textContent;
+  if (text.startsWith('Select')) { toast('Select a key first', 'error'); return; }
+  copyText(text);
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
