@@ -112,6 +112,7 @@ class AgentState:
     last_response: SubagentResponse | None = None
     last_spoke: str = ""
     turn_activated: int = 0
+    invocation_count: int = 0
 
 
 # ── WorkflowGraph ─────────────────────────────────────────────────────────────
@@ -152,9 +153,12 @@ class WorkflowGraph:
         return [
             node for node in self.nodes.values()
             if self.deps_met(node.id)
-            and self.states[node.id].status
-            not in (AgentStatus.COMPLETED, AgentStatus.FAILED)
             and not node.auto_run
+            and (
+                node.interrupt_eligible  # interrupt agents are always re-invokable
+                or self.states[node.id].status
+                not in (AgentStatus.COMPLETED, AgentStatus.FAILED)
+            )
         ]
 
     def active_primary(self) -> AgentState | None:
@@ -219,12 +223,14 @@ class WorkflowGraph:
         if response.speak:
             state.last_spoke = response.speak
         state.turn_activated = turn
+        state.invocation_count += 1
 
     # ── Prompt helpers ────────────────────────────────────────────────────────
 
     def status_summary(self) -> str:
         lines = []
         for nid, state in self.states.items():
+            node = self.nodes[nid]
             spoke = f' | last said: "{state.last_spoke[:60]}"' if state.last_spoke else ""
             extra = ""
             if state.internal_state.get("current_field"):
@@ -232,7 +238,12 @@ class WorkflowGraph:
             if state.status == AgentStatus.WAITING_CONFIRM:
                 pv = state.internal_state.get("pending_value", "")
                 extra = f' | WAITING YES/NO for: "{pv}"'
-            lines.append(f"  {nid}: {state.status.value}{extra}{spoke}")
+            invocations = (
+                f" | invoked {state.invocation_count}x"
+                if node.interrupt_eligible and state.invocation_count > 0
+                else ""
+            )
+            lines.append(f"  {nid}: {state.status.value}{extra}{invocations}{spoke}")
         return "\n".join(lines)
 
     def available_summary(self) -> str:
