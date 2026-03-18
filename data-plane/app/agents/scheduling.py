@@ -88,7 +88,6 @@ class SchedulingAgent(AgentBase):
                     "Match a booking purpose to an event type. Return JSON: {\"index\": <0-based int>} or {\"index\": null}.",
                     f"Purpose: \"{purpose}\"\nEvent types:\n" +
                     "\n".join(f"{i}. {et['name']}" + (f" — {et['description']}" if et.get('description') else "") for i, et in enumerate(event_types)),
-                    max_tokens=30,
                 )
                 idx = result.get("index")
                 if idx is not None and 0 <= int(idx) < len(event_types):
@@ -134,7 +133,6 @@ class SchedulingAgent(AgentBase):
         speak = llm_text_call(
             "Present available appointment slots to a caller over the phone. Friendly and concise. No markdown. Under three sentences.",
             f"Slots:\n{numbered}\nAsk which one they prefer.",
-            max_tokens=120,
         )
         return SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
@@ -151,7 +149,6 @@ class SchedulingAgent(AgentBase):
                 result = llm_json_call(
                     "Identify which slot number the caller chose. Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
                     f"Available slots:\n{numbered}\nCaller said: \"{utterance}\"",
-                    max_tokens=20,
                 )
                 slot_num = result.get("slot")
                 if slot_num is not None:
@@ -164,7 +161,6 @@ class SchedulingAgent(AgentBase):
                         speak = llm_text_call(
                             "Generate a single voice sentence confirming a chosen appointment slot and asking for final confirmation.",
                             f"Slot: {chosen['description']}\nPattern: 'I'll book you for [slot]. Shall I confirm?'",
-                            max_tokens=60,
                         )
                         return SubagentResponse(
                             status=AgentStatus.WAITING_CONFIRM,
@@ -182,7 +178,6 @@ class SchedulingAgent(AgentBase):
                 f"Today is {current_date}. Convert a natural language time preference to a UTC date range. "
                 "Return JSON: {{\"start_time\": \"ISO\", \"end_time\": \"ISO\"}} or {{\"found\": false}}.",
                 f"Caller said: \"{utterance}\"",
-                max_tokens=60,
             )
             if pref.get("start_time") and pref.get("end_time"):
                 from datetime import datetime as dt
@@ -213,7 +208,6 @@ class SchedulingAgent(AgentBase):
                 speak = llm_text_call(
                     "Present appointment slots to a caller. Friendly, concise, no markdown.",
                     f"Slots:\n{numbered2}\nAsk which one they prefer.",
-                    max_tokens=120,
                 )
                 return SubagentResponse(
                     status=AgentStatus.IN_PROGRESS,
@@ -233,7 +227,6 @@ class SchedulingAgent(AgentBase):
             speak = llm_text_call(
                 "Generate a voice sentence confirming an appointment slot and asking for final confirmation.",
                 f"Slot: {chosen['description']}",
-                max_tokens=60,
             )
             return SubagentResponse(
                 status=AgentStatus.WAITING_CONFIRM,
@@ -247,7 +240,6 @@ class SchedulingAgent(AgentBase):
             speak = llm_text_call(
                 "Re-present appointment slots to a caller who didn't make a clear choice. Friendly.",
                 f"Slots:\n{numbered}",
-                max_tokens=100,
             )
         else:
             speak = "I don't have any slots loaded. When would work best for you?"
@@ -297,7 +289,6 @@ class SchedulingAgent(AgentBase):
             speak = llm_text_call(
                 "Generate a warm booking confirmation message for a voice call. Two to three sentences.",
                 f"Slot: {slot.description}\nBooking ref: {booking_id}\nCaller details:\n{field_summary or '(none)'}\n{email_note}",
-                max_tokens=120,
             )
             internal_state["stage"] = "done"
             return SubagentResponse(
@@ -315,7 +306,6 @@ class SchedulingAgent(AgentBase):
                 speak = llm_text_call(
                     "Re-present appointment slots after caller declined the chosen one.",
                     f"Slots:\n{numbered}",
-                    max_tokens=100,
                 )
             else:
                 speak = "No problem. When would work best for you?"

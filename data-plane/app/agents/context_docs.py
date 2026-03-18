@@ -38,7 +38,6 @@ class ContextDocsAgent(AgentBase):
             result = llm_json_call(
                 _ANSWER_SYSTEM,
                 f"DOCUMENTS:\n{docs_text}\n\nCALLER QUESTION: \"{utterance}\"",
-                max_tokens=120,
             )
             if result.get("found") and result.get("answer"):
                 return SubagentResponse(

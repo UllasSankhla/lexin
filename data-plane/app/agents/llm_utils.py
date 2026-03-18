@@ -25,7 +25,7 @@ def _get_client() -> Cerebras:
 def llm_json_call(
     system_prompt: str,
     user_message: str,
-    max_tokens: int = 256,
+    max_tokens: int = 1024,
 ) -> dict:
     """
     Single LLM call that returns a parsed JSON dict.
@@ -88,7 +88,7 @@ def _try_repair_json(text: str) -> dict | None:
 def llm_text_call(
     system_prompt: str,
     user_message: str,
-    max_tokens: int = 150,
+    max_tokens: int = 1024,
 ) -> str:
     """Single LLM call returning plain text. Used for speak generation."""
     t0 = time.monotonic()

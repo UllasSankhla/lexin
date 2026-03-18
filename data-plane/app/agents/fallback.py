@@ -25,7 +25,6 @@ class FallbackAgent(AgentBase):
         speak = llm_text_call(
             "You are an AI receptionist. Acknowledge that you cannot answer the caller's question right now and let them know someone will follow up. One sentence, warm and professional.",
             f"Caller asked: \"{utterance}\"",
-            max_tokens=60,
         )
         return SubagentResponse(
             status=AgentStatus.COMPLETED,

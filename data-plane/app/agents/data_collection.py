@@ -243,7 +243,6 @@ class DataCollectionAgent(AgentBase):
         return llm_text_call(
             "You generate short, friendly voice questions for an AI receptionist. One sentence, no preamble.",
             f"Generate a voice question asking the caller for their {field_label}. {hint}",
-            max_tokens=60,
         )
 
     def _extract_value(self, field_label: str, field_type: str, utterance: str) -> str | None:
@@ -259,7 +258,6 @@ class DataCollectionAgent(AgentBase):
             result = llm_json_call(
                 _EXTRACT_SYSTEM,
                 f"Field: {field_label} (type: {field_type})\n{guidance}\nCaller said: \"{utterance}\"",
-                max_tokens=60,
             )
             if result.get("found") and result.get("value"):
                 return str(result["value"]).strip()
@@ -284,7 +282,6 @@ class DataCollectionAgent(AgentBase):
         return llm_text_call(
             "You generate short voice phrases for an AI receptionist. One sentence only.",
             prompt,
-            max_tokens=60,
         )
 
     def _detect_confirmation(self, utterance: str) -> tuple[str, str | None]:
@@ -293,7 +290,6 @@ class DataCollectionAgent(AgentBase):
             result = llm_json_call(
                 _CONFIRM_SYSTEM,
                 f"Caller said: \"{utterance}\"",
-                max_tokens=60,
             )
             intent = result.get("intent", "unclear")
             correction = result.get("correction") if intent == "unclear" else None

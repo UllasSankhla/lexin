@@ -38,7 +38,6 @@ class FAQAgent(AgentBase):
             match = llm_json_call(
                 _MATCH_SYSTEM,
                 f"FAQ list:\n{faq_list}\n\nCaller asked: \"{utterance}\"",
-                max_tokens=40,
             )
             if match.get("matched") and match.get("index") is not None:
                 idx = int(match["index"])
@@ -47,7 +46,6 @@ class FAQAgent(AgentBase):
                     answer = llm_text_call(
                         "You are an AI receptionist answering a caller's question. Be concise and conversational.",
                         f"FAQ answer to use: {faq['answer']}\nRephrase naturally for voice. Two sentences max.",
-                        max_tokens=80,
                     )
                     return SubagentResponse(
                         status=AgentStatus.COMPLETED,
