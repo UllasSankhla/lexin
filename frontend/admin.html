@@ -1166,24 +1166,45 @@ function loadCurrentPage() {
 
 // ── API HELPERS ──────────────────────────────────────────────────────────────
 async function apiFetch(base, path, options = {}) {
+  const method = options.method || 'GET';
   const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
   if (options.body && typeof options.body !== 'string' && !(options.body instanceof FormData)) {
     options.body = JSON.stringify(options.body);
   }
   if (options.body instanceof FormData) delete headers['Content-Type'];
-  const res = await fetch(base + path, { ...options, headers });
+  console.debug(`[api] ${method} ${base}${path}`);
+  let res;
+  try {
+    res = await fetch(base + path, { ...options, headers });
+  } catch (networkErr) {
+    console.error(`[api] Network error ${method} ${base}${path}:`, networkErr);
+    throw new Error(`Network error: ${networkErr.message}`);
+  }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Request failed');
+    let errDetail = res.statusText;
+    try {
+      const errBody = await res.json();
+      errDetail = errBody.detail || errBody.message || res.statusText;
+    } catch (_) {}
+    console.error(`[api] ${method} ${base}${path} → ${res.status} ${res.statusText}:`, errDetail);
+    throw new Error(errDetail || 'Request failed');
   }
   if (res.status === 204) return null;
-  return res.json();
+  try {
+    return await res.json();
+  } catch (parseErr) {
+    console.error(`[api] JSON parse failed for ${method} ${base}${path}:`, parseErr);
+    throw new Error(`Response parse error: ${parseErr.message}`);
+  }
 }
 const cp = (path, opts) => apiFetch(CP, path, opts);
 const dp = (path, opts) => apiFetch(DP, path, opts);
 
 // ── TOAST ────────────────────────────────────────────────────────────────────
 function toast(msg, type = '') {
+  if (type === 'error') console.error('[toast:error]', msg);
+  else if (type === 'warning') console.warn('[toast:warning]', msg);
+  else console.log('[toast]', msg);
   const el = document.createElement('div');
   el.className = 'toast ' + type;
   el.textContent = msg;
@@ -1425,7 +1446,9 @@ async function editParam(id) {
     document.getElementById('pType').value = p.data_type;
     document.getElementById('pOrder').value = p.collection_order;
     document.getElementById('pRequired').checked = p.required;
-    const hints = JSON.parse(p.extraction_hints || '[]');
+    const hints = Array.isArray(p.extraction_hints)
+      ? p.extraction_hints
+      : (p.extraction_hints ? JSON.parse(p.extraction_hints) : []);
     document.getElementById('pHints').value = hints.join(', ');
     document.getElementById('pValMsg').value = p.validation_message || '';
     openModal('paramModal');
