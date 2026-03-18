@@ -18,8 +18,12 @@ _BUILTIN_PATTERNS = {
 
 _EXTRACT_SYSTEM = (
     "You are extracting a single field value from a caller's voice utterance. "
-    "Return ONLY valid JSON: {\"value\": \"<extracted>\", \"found\": true} "
-    "or {\"value\": null, \"found\": false} if nothing usable."
+    "Return ONLY valid JSON with these fields: "
+    "\"found\" (bool), \"value\" (string or null), \"refused\" (bool). "
+    "Set refused=true if the caller is explicitly declining to provide the value "
+    "(e.g. 'I don't have one', 'skip', 'not applicable', 'I'd rather not say'). "
+    "Example: {\"found\": true, \"value\": \"ABC123\", \"refused\": false} "
+    "or {\"found\": false, \"value\": null, \"refused\": true}"
 )
 
 _CONFIRM_SYSTEM = (
@@ -101,8 +105,33 @@ class DataCollectionAgent(AgentBase):
             )
 
         if stage == "asking":
-            # Extract value from utterance
-            extracted = self._extract_value(field_label, field_type, utterance)
+            # Extract value — also get refused flag in the same LLM call
+            extracted, refused = self._extract_value(field_label, field_type, utterance)
+
+            # Optional field refused — skip it and move on
+            if refused and not current_param.get("required", True):
+                collected[field_name] = ""
+                internal_state["collected"] = collected
+                internal_state["stage"] = "asking"
+                internal_state["retry_count"] = 0
+                logger.info("DataCollection: optional field %r skipped by caller refusal", field_name)
+                remaining2 = [p for p in parameters if p["name"] not in collected]
+                if not remaining2:
+                    return SubagentResponse(
+                        status=AgentStatus.COMPLETED,
+                        speak="No problem. I have all the information I need.",
+                        collected=collected,
+                        internal_state=internal_state,
+                    )
+                next_p = remaining2[0]
+                q = self._ask_question(next_p["display_label"], next_p.get("data_type", "text"))
+                return SubagentResponse(
+                    status=AgentStatus.IN_PROGRESS,
+                    speak=f"No problem. {q}",
+                    collected=collected,
+                    internal_state=internal_state,
+                )
+
             if not extracted:
                 retry = internal_state.get("retry_count", 0) + 1
                 internal_state["retry_count"] = retry
@@ -245,7 +274,8 @@ class DataCollectionAgent(AgentBase):
             f"Generate a voice question asking the caller for their {field_label}. {hint}",
         )
 
-    def _extract_value(self, field_label: str, field_type: str, utterance: str) -> str | None:
+    def _extract_value(self, field_label: str, field_type: str, utterance: str) -> tuple[str | None, bool]:
+        """Returns (extracted_value_or_None, refused)."""
         type_guidance = {
             "email": "Include the full address with @ symbol and domain.",
             "phone": "Digits only, preserve area code.",
@@ -259,11 +289,13 @@ class DataCollectionAgent(AgentBase):
                 _EXTRACT_SYSTEM,
                 f"Field: {field_label} (type: {field_type})\n{guidance}\nCaller said: \"{utterance}\"",
             )
+            refused = bool(result.get("refused", False))
             if result.get("found") and result.get("value"):
-                return str(result["value"]).strip()
+                return str(result["value"]).strip(), False
+            return None, refused
         except Exception as exc:
             logger.warning("DataCollection extract_value failed: %s", exc)
-        return None
+        return None, False
 
     def _validate(self, param: dict, value: str) -> tuple[bool, str]:
         pattern = param.get("validation_regex") or _BUILTIN_PATTERNS.get(param.get("data_type", ""))
