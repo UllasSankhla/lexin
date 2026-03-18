@@ -1,8 +1,13 @@
 """Per-call session object holding all call state."""
+from __future__ import annotations
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from app.websocket.state_machine import StateMachine, CallState
 from app.pipeline.parameter_collector import CollectionState
+
+if TYPE_CHECKING:
+    from app.agents.workflow import WorkflowGraph
 
 
 @dataclass
@@ -12,6 +17,8 @@ class CallSession:
     config: dict
     state_machine: StateMachine = field(default_factory=StateMachine)
     collection_state: CollectionState | None = None
+    graph: WorkflowGraph | None = None
+    notes_buffer: str = ""
     conversation_history: list[dict] = field(default_factory=list)
     transcript_lines: list[str] = field(default_factory=list)
     analytics_events: list[dict] = field(default_factory=list)

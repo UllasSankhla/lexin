@@ -3,15 +3,15 @@
 Orchestration flow
 ==================
 1.  STT session opens (Deepgram nova-2-phonecall); greeting is spoken.
-2.  BookingWorkflow.get_opening() is called → first field question is spoken.
+2.  data_collection agent is invoked with empty utterance → first field question spoken.
 3.  Read loop: binary frames → STT; text frames → control messages.
 4.  STT on_final fires → _process_utterance(text).
-5.  _process_utterance delegates entirely to BookingWorkflow.process_utterance().
-6.  WorkflowResult carries:
+5.  _process_utterance routes to the appropriate agent via Router.
+6.  Agent response carries:
       .speak          → TTS + transcript
-      .field_confirmed → DB persist + client event
-      .booking_details → DB persist + client event
-      .call_complete   → trigger _handle_completion()
+      .collected      → DB persist + client event
+      .booking        → DB persist + client event
+      .requires_router_resume → resume interrupted primary agent
 """
 from __future__ import annotations
 
@@ -26,9 +26,11 @@ from datetime import datetime, timezone
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.config import settings
-from app.pipeline.booking_workflow import BookingWorkflow
-from app.pipeline.llm import LLMClient, LLMToolkit, TOOLKIT_SYSTEM_PROMPT
-from app.pipeline.parameter_collector import load_parameters
+from app.agents.graph_config import WORKFLOW_NODES
+from app.agents.workflow import WorkflowGraph
+from app.agents.router import Router
+from app.agents.registry import build_registry
+from app.agents.base import AgentStatus
 from app.pipeline.stt import STTSession
 from app.pipeline.tts import TTSClient
 from app.services.config_client import get_cached_config
@@ -72,20 +74,16 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     assistant_cfg = config.get("assistant", {})
 
     # ── Pipeline initialisation ───────────────────────────────────────────────
-    # Parameters to collect are loaded entirely from the control-plane config.
-    # Nothing in the data plane hardcodes which fields to ask for.
-    collection_state = load_parameters(config)
-    session.collection_state = collection_state
+    graph = WorkflowGraph(WORKFLOW_NODES)
+    session.graph = graph
+    turn_counter = [0]
+    collected_all: dict[str, str] = {}   # accumulates confirmed fields across turns
+    booking_result: dict = {}
+    notes_buffer: str = ""
+    transcript_turns: list[dict] = []    # for webhook agent
 
-    # LLMToolkit uses a minimal extraction-focused system prompt, NOT the
-    # conversational booking prompt. A conversational system prompt would
-    # cause the LLM to produce full sentences instead of bare extracted values.
-    llm_client = LLMClient(system_prompt=TOOLKIT_SYSTEM_PROMPT)
-    llm_toolkit = LLMToolkit(llm_client)
-    llm_toolkit.on_llm_response = lambda purpose, latency_ms, tokens: \
-        session.record_analytics(f"llm_response.{purpose}", "llm", latency_ms)
-
-    workflow = BookingWorkflow(collection_state, llm_toolkit, config)
+    router = Router(graph, goal="Collect caller information and schedule an appointment.")
+    registry = build_registry(session.call_id, transcript_turns)
 
     tts = TTSClient(voice=assistant_cfg.get("persona_voice"))
 
@@ -208,94 +206,187 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         spell_rules=config.get("spell_rules", []),
     )
 
-    # ── Core: process a caller utterance through the workflow ─────────────────
+    # ── Core: process a caller utterance through the agent system ─────────────
 
     async def _process_utterance(caller_text: str) -> None:
+        nonlocal collected_all, booking_result, notes_buffer
         if session.state_machine.is_terminal():
             return
 
         session.add_user_turn(caller_text)
+        transcript_turns.append({"role": "user", "content": caller_text})
         await safe_send_text("server.thinking", {})
+        turn_counter[0] += 1
+        current_turn = turn_counter[0]
 
-        # Run workflow (sync LLM calls) in a thread executor
+        # Build recent history for router
+        recent_history = [
+            {"role": t["role"], "content": t["content"]}
+            for t in transcript_turns[-8:]
+        ]
+
         t0 = time.monotonic()
         try:
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
+
+            # Route
+            agent_id = await loop.run_in_executor(
+                None, lambda: router.select(caller_text, recent_history)
+            )
+
+            # Build enriched config with accumulated state for agents that need it
+            enriched_config = {
+                **config,
+                "_collected": collected_all,
+                "_booking": booking_result,
+                "_notes": notes_buffer,
+            }
+
+            agent = registry[agent_id]
+            agent_state = graph.states[agent_id]
+
+            # Invoke agent
+            response = await loop.run_in_executor(
                 None,
-                lambda: workflow.process_utterance(caller_text),
+                lambda: agent.process(
+                    caller_text,
+                    dict(agent_state.internal_state),
+                    enriched_config,
+                    recent_history,
+                )
             )
-        except Exception as exc:
-            logger.error("Workflow error: %s", exc, exc_info=True)
-            await safe_send_text("server.error", {"code": "workflow_error", "message": "Processing failed", "fatal": False})
-            return
 
-        session.record_analytics("workflow_turn", "llm", (time.monotonic() - t0) * 1000)
-        session.add_assistant_turn(result.speak)
+            graph.update(agent_id, response, current_turn)
 
-        audio_id = f"resp-{seq[0] + 1}"
-        await safe_send_text("server.response_text", {"text": result.speak, "audio_id": audio_id})
+            # Handle interrupt-eligible agent that is done — check resume stack
+            if response.requires_router_resume:
+                resume_id = router.pop_resume()
+                if resume_id:
+                    resume_state = graph.states[resume_id]
+                    resume_agent = registry[resume_id]
+                    # Resume with empty utterance to re-ask the pending question
+                    resume_response = await loop.run_in_executor(
+                        None,
+                        lambda: resume_agent.process(
+                            "",
+                            dict(resume_state.internal_state),
+                            enriched_config,
+                            recent_history,
+                        )
+                    )
+                    graph.update(resume_id, resume_response, current_turn)
+                    # Compose: interrupt answer + resume question
+                    speak = ""
+                    if response.speak:
+                        speak = response.speak
+                    if resume_response.speak:
+                        speak = (speak + " " + resume_response.speak).strip() if speak else resume_response.speak
+                    # Merge collected from resume response if any
+                    if resume_response.collected:
+                        collected_all.update(resume_response.collected)
+                    # Use resume_response for field persistence but combine speak
+                    response = resume_response
+                    response.speak = speak
 
-        # Persist confirmed field
-        if result.field_confirmed:
-            name, raw, normalized = result.field_confirmed
-            remaining = sum(
-                1 for p in collection_state.required_params
-                if p.name not in collection_state.collected
-            )
-            await safe_send_text("server.parameter_collected", {
-                "parameter_name": name,
-                "value": normalized,
-                "remaining_count": remaining,
-            })
-            db_session.add(GatheredParameter(
-                call_id=session.call_id,
-                parameter_name=name,
-                raw_value=raw,
-                normalized_value=normalized,
-                validated=True,
-            ))
-            db_session.commit()
+            session.record_analytics("workflow_turn", "llm", (time.monotonic() - t0) * 1000)
 
-        # Persist derived field (e.g. case_type from case_description)
-        if result.extra_field_confirmed:
-            ename, eraw, enormalized = result.extra_field_confirmed
-            await safe_send_text("server.parameter_collected", {
-                "parameter_name": ename,
-                "value": enormalized,
-                "remaining_count": 0,
-            })
-            db_session.add(GatheredParameter(
-                call_id=session.call_id,
-                parameter_name=ename,
-                raw_value=eraw,
-                normalized_value=enormalized,
-                validated=True,
-            ))
-            db_session.commit()
+            speak_text = response.speak
+            session.add_assistant_turn(speak_text)
+            transcript_turns.append({"role": "assistant", "content": speak_text})
 
-        # Speak the response
-        await _send_tts(result.speak, audio_id)
+            audio_id = f"resp-{seq[0] + 1}"
+            await safe_send_text("server.response_text", {"text": speak_text, "audio_id": audio_id})
 
-        # Persist booking and trigger completion
-        if result.booking_details:
-            await safe_send_text("server.booking_confirmed", {"booking": result.booking_details})
-            record = db_session.get(CallRecord, session.call_id)
-            if record:
-                record.booking_id     = result.booking_details.get("booking_id")
-                record.booking_status = result.booking_details.get("status")
+            # Persist collected fields
+            if response.collected:
+                for field_name, field_value in response.collected.items():
+                    if field_name not in collected_all:
+                        collected_all[field_name] = field_value
+                        remaining = sum(
+                            1 for p in config.get("parameters", [])
+                            if p["name"] not in collected_all
+                        )
+                        await safe_send_text("server.parameter_collected", {
+                            "parameter_name": field_name,
+                            "value": field_value,
+                            "remaining_count": remaining,
+                        })
+                        db_session.add(GatheredParameter(
+                            call_id=session.call_id,
+                            parameter_name=field_name,
+                            raw_value=field_value,
+                            normalized_value=field_value,
+                            validated=True,
+                        ))
                 db_session.commit()
 
-        if result.call_complete:
-            await asyncio.sleep(2)   # let TTS finish playing
-            await _handle_completion(result.booking_details)
+            # Accumulate notes
+            if response.notes:
+                notes_buffer = response.notes
+                session.notes_buffer = notes_buffer
+
+            # Persist booking
+            if response.booking:
+                booking_result = response.booking
+                await safe_send_text("server.booking_confirmed", {
+                    "booking_id": response.booking.get("booking_id"),
+                    "slot_description": response.booking.get("slot_description", ""),
+                })
+                record = db_session.get(CallRecord, session.call_id)
+                if record:
+                    record.booking_id = response.booking.get("booking_id")
+                    record.booking_status = response.booking.get("status")
+                    db_session.commit()
+
+            # Trigger auto-run agents (webhook)
+            for auto_node in graph.auto_run_ready():
+                auto_agent = registry[auto_node.id]
+                auto_state = graph.states[auto_node.id]
+                enriched_config2 = {
+                    **config,
+                    "_collected": collected_all,
+                    "_booking": booking_result,
+                    "_notes": notes_buffer,
+                }
+                auto_response = await loop.run_in_executor(
+                    None,
+                    lambda: auto_agent.process(
+                        "", dict(auto_state.internal_state), enriched_config2, []
+                    )
+                )
+                graph.update(auto_node.id, auto_response, current_turn)
+
+                # If the webhook agent stored dispatch params, fire them async
+                dispatch_params = auto_response.internal_state.get("_webhook_dispatch")
+                if dispatch_params:
+                    asyncio.create_task(dispatch_webhooks(
+                        config=config,
+                        call_id=dispatch_params["call_id"],
+                        duration_sec=session.duration_sec(),
+                        collected=dispatch_params["collected"],
+                        transcript_path=None,
+                        caller_name=dispatch_params.get("caller_name", ""),
+                        ai_summary=dispatch_params.get("ai_summary", ""),
+                        booking_details=dispatch_params.get("booking"),
+                    ))
+
+            # Check goal complete
+            if graph.is_goal_complete():
+                await _finalize_call("completed")
+                return
+
+            await _send_tts(speak_text, audio_id)
+
+        except Exception as exc:
+            logger.error("Agent processing error: %s", exc, exc_info=True)
+            await safe_send_text("server.error", {"code": "agent_error", "message": "Processing failed", "fatal": False})
 
     # ── Completion ────────────────────────────────────────────────────────────
 
     async def _handle_completion(booking_details: dict | None = None) -> None:
         session.state_machine.transition(CallState.COMPLETING)
         await safe_send_text("server.call_completing", {
-            "collected_parameters": collection_state.collected,
+            "collected_parameters": collected_all,
             "booking": booking_details,
         })
         await asyncio.sleep(1)
@@ -319,7 +410,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 None,
                 lambda: generate_call_summary(
                     session.transcript_lines,
-                    collection_state.collected if collection_state else {},
+                    collected_all,
                 ),
             )
         except Exception as exc:
@@ -352,7 +443,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             config=config,
             call_id=session.call_id,
             duration_sec=duration,
-            collected=collection_state.collected,
+            collected=collected_all,
             transcript_path=transcript_path,
             caller_name=caller_name,
             ai_summary=ai_summary,
@@ -388,11 +479,17 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         await safe_send_text("server.response_text", {"text": greeting_text, "audio_id": "greet-001"})
         await _send_tts(greeting_text, "greet-001")
 
-        # Opening — ask the first collection question (or present slots if no
-        # parameters are configured).  Runs in executor because get_opening()
-        # makes a synchronous LLM call to generate the first question.
+        # Opening — invoke data_collection with empty utterance to get first question
         loop = asyncio.get_event_loop()
-        opening_text = await loop.run_in_executor(None, workflow.get_opening)
+        graph.states["data_collection"].status = AgentStatus.IN_PROGRESS
+        dc_agent = registry["data_collection"]
+        dc_state = graph.states["data_collection"]
+        opening_response = await loop.run_in_executor(
+            None,
+            lambda: dc_agent.process("", dc_state.internal_state, config, [])
+        )
+        graph.update("data_collection", opening_response, 0)
+        opening_text = opening_response.speak or assistant_cfg.get("greeting_message", "Hello! How can I help you today?")
         session.add_assistant_turn(opening_text)
         await safe_send_text("server.response_text", {"text": opening_text, "audio_id": "open-001"})
         await _send_tts(opening_text, "open-001")
