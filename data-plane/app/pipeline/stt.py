@@ -117,10 +117,16 @@ class STTSession:
         text = self._apply_spell_rules(raw_text)
         confidence = self._word_confidence(message.words)
 
-        logger.info(
-            "STT TurnInfo | event=%s | text=%r | conf=%.2f | eot_conf=%.2f | elapsed=%.0fms",
-            event, text, confidence, message.end_of_turn_confidence, elapsed_ms,
-        )
+        if event == "Update":
+            logger.debug(
+                "STT TurnInfo | event=Update | text=%r | conf=%.2f | elapsed=%.0fms",
+                text, confidence, elapsed_ms,
+            )
+        else:
+            logger.info(
+                "STT TurnInfo | event=%s | text=%r | conf=%.2f | eot_conf=%.2f | elapsed=%.0fms",
+                event, text, confidence, message.end_of_turn_confidence, elapsed_ms,
+            )
 
         if not text:
             logger.debug("STT empty transcript — skipping")
