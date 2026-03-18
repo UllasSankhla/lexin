@@ -305,6 +305,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                         break
 
             # Handle interrupt-eligible agent that is done — check resume stack
+            resumed_from_stack = False
             if response.requires_router_resume:
                 resume_id = router.pop_resume()
                 if resume_id:
@@ -320,6 +321,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                             recent_history,
                         )
                     )
+                    resumed_from_stack = True
                     graph.update(resume_id, resume_response, current_turn)
                     logger.info(
                         "Agent response (resumed) | agent=%s | status=%s | speak=%r | collected=%s",
@@ -442,8 +444,10 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             # and the primary goal is still pending, proactively invoke the next
             # primary agent with an empty utterance to produce its next question.
             # This keeps the conversation on track after side-trips.
+            # Skip if the resume stack already re-invoked the primary agent
+            # (requires_router_resume path above) — otherwise the question is asked twice.
             current_node = graph.nodes.get(agent_id)
-            if current_node and current_node.interrupt_eligible:
+            if current_node and current_node.interrupt_eligible and not resumed_from_stack:
                 next_goal_id = graph.next_primary_goal()
                 if next_goal_id:
                     goal_state = graph.states[next_goal_id]
