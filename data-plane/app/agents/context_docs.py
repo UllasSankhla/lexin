@@ -43,7 +43,6 @@ class ContextDocsAgent(AgentBase):
                 return SubagentResponse(
                     status=AgentStatus.COMPLETED,
                     speak=result["answer"],
-                    requires_router_resume=True,
                     internal_state=internal_state,
                 )
         except Exception as exc:

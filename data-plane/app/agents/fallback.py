@@ -30,6 +30,5 @@ class FallbackAgent(AgentBase):
             status=AgentStatus.COMPLETED,
             speak=speak,
             notes=updated_notes,
-            requires_router_resume=True,
             internal_state=internal_state,
         )

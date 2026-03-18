@@ -27,7 +27,6 @@ class FAQAgent(AgentBase):
             return SubagentResponse(
                 status=AgentStatus.COMPLETED,
                 speak="I'm sorry, I don't have an answer to that right now.",
-                requires_router_resume=True,
                 internal_state=internal_state,
             )
 
@@ -50,7 +49,6 @@ class FAQAgent(AgentBase):
                     return SubagentResponse(
                         status=AgentStatus.COMPLETED,
                         speak=answer,
-                        requires_router_resume=True,
                         internal_state=internal_state,
                     )
         except Exception as exc:

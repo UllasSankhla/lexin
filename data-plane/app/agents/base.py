@@ -25,8 +25,6 @@ class SubagentResponse:
     notes: str | None = None
     # Scheduling: confirmed booking dict
     booking: dict | None = None
-    # True when interrupt agent is done and wants router to resume prior primary agent
-    requires_router_resume: bool = False
     # Agent persists its own state here; router stores and passes back next turn
     internal_state: dict = field(default_factory=dict)
 
