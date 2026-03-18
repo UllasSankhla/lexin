@@ -75,11 +75,31 @@ class WorkflowGraph:
         state.turn_activated = turn
 
     def is_goal_complete(self) -> bool:
+        """All primary nodes completed successfully."""
         return all(
             self.states[nid].status == AgentStatus.COMPLETED
             for nid, node in self.nodes.items()
             if not node.auto_run and not node.interrupt_eligible
         )
+
+    def is_goal_terminal(self) -> bool:
+        """All primary nodes are COMPLETED or FAILED — no more work possible."""
+        return all(
+            self.states[nid].status in (AgentStatus.COMPLETED, AgentStatus.FAILED)
+            for nid, node in self.nodes.items()
+            if not node.auto_run and not node.interrupt_eligible
+        )
+
+    def next_primary_goal(self) -> str | None:
+        """Return the agent_id of the next runnable, incomplete primary agent."""
+        for nid, node in self.nodes.items():
+            if node.auto_run or node.interrupt_eligible:
+                continue
+            state = self.states[nid]
+            if state.status not in (AgentStatus.COMPLETED, AgentStatus.FAILED) \
+                    and self.deps_met(nid):
+                return nid
+        return None
 
     def auto_run_ready(self) -> list[WorkflowNode]:
         return [

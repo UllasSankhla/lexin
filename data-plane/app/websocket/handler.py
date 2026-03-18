@@ -88,6 +88,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     tts = TTSClient(voice=assistant_cfg.get("persona_voice"))
 
     utterance_lock = asyncio.Lock()
+    consecutive_errors = [0]   # reset on any successful turn; triggers end-call after threshold
 
     # TTS streaming state — used for barge-in (interruption) detection.
     tts_playing = False
@@ -134,6 +135,9 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
     async def _send_tts(text: str, audio_id: str) -> None:
         nonlocal tts_playing
+        if not text or not text.strip():
+            logger.warning("_send_tts called with empty text — skipping (audio_id=%s)", audio_id)
+            return
         tts_cancel.clear()
         tts_playing = True
         t0 = time.monotonic()
@@ -268,6 +272,38 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 response.requires_router_resume,
             )
 
+            # ── Fallback chain for failed/silent interrupt-eligible agents ────
+            # faq → context_docs → fallback, stopping at the first that speaks.
+            # This prevents empty speak from reaching TTS when FAQ has no match
+            # or context_docs has no documents.
+            if (response.status == AgentStatus.FAILED or not response.speak) \
+                    and graph.nodes[agent_id].interrupt_eligible:
+                fallback_order = [
+                    fid for fid in ("context_docs", "fallback")
+                    if fid != agent_id and fid in registry
+                ]
+                for fallback_id in fallback_order:
+                    fb_state = graph.states[fallback_id]
+                    fb_agent = registry[fallback_id]
+                    fb_response = await loop.run_in_executor(
+                        None,
+                        lambda: fb_agent.process(
+                            caller_text,
+                            dict(fb_state.internal_state),
+                            enriched_config,
+                            recent_history,
+                        )
+                    )
+                    graph.update(fallback_id, fb_response, current_turn)
+                    logger.info(
+                        "Fallback chain | agent=%s | status=%s | speak=%r",
+                        fallback_id, fb_response.status.value, (fb_response.speak or "")[:80],
+                    )
+                    if fb_response.speak:
+                        response = fb_response
+                        agent_id = fallback_id
+                        break
+
             # Handle interrupt-eligible agent that is done — check resume stack
             if response.requires_router_resume:
                 resume_id = router.pop_resume()
@@ -306,8 +342,17 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                     response.speak = speak
 
             session.record_analytics("workflow_turn", "llm", (time.monotonic() - t0) * 1000)
+            consecutive_errors[0] = 0   # successful agent turn — reset error counter
 
+            # Final safety net: never speak an empty string
             speak_text = response.speak
+            if not speak_text or not speak_text.strip():
+                logger.warning(
+                    "speak_text still empty after fallback chain (agent=%s) — using recovery phrase",
+                    agent_id,
+                )
+                speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
+
             session.add_assistant_turn(speak_text)
             transcript_turns.append({"role": "assistant", "content": speak_text})
 
@@ -392,16 +437,88 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                         booking_details=dispatch_params.get("booking"),
                     ))
 
-            # Check goal complete
+            # ── Goal continuation ─────────────────────────────────────────────
+            # If an interrupt-eligible agent just ran (FAQ / context / fallback)
+            # and the primary goal is still pending, proactively invoke the next
+            # primary agent with an empty utterance to produce its next question.
+            # This keeps the conversation on track after side-trips.
+            current_node = graph.nodes.get(agent_id)
+            if current_node and current_node.interrupt_eligible:
+                next_goal_id = graph.next_primary_goal()
+                if next_goal_id:
+                    goal_state = graph.states[next_goal_id]
+                    goal_agent = registry[next_goal_id]
+                    goal_response = await loop.run_in_executor(
+                        None,
+                        lambda: goal_agent.process(
+                            "",
+                            dict(goal_state.internal_state),
+                            enriched_config,
+                            recent_history,
+                        )
+                    )
+                    graph.update(next_goal_id, goal_response, current_turn)
+                    logger.info(
+                        "Goal continuation | agent=%s | status=%s | speak=%r",
+                        next_goal_id, goal_response.status.value, (goal_response.speak or "")[:80],
+                    )
+                    if goal_response.speak:
+                        speak_text = (speak_text + " " + goal_response.speak).strip()
+                    if goal_response.collected:
+                        collected_all.update(goal_response.collected)
+
+            # ── Goal check ────────────────────────────────────────────────────
+            # Success: all primary nodes completed.
             if graph.is_goal_complete():
+                await _send_tts(speak_text, audio_id)
                 await _finalize_call("completed")
+                return
+
+            # Terminal failure: all primary nodes are completed or explicitly
+            # failed (e.g. scheduling exhausted, required field unresolvable).
+            # Only finalize here — never end the call on a transient agent error.
+            if graph.is_goal_terminal():
+                logger.warning(
+                    "Call %s: goal is terminal but not fully completed — primary node statuses: %s",
+                    session.call_id,
+                    {nid: graph.states[nid].status.value for nid, node in graph.nodes.items()
+                     if not node.auto_run and not node.interrupt_eligible},
+                )
+                await _send_tts(speak_text, audio_id)
+                await _finalize_call("goal_failed")
                 return
 
             await _send_tts(speak_text, audio_id)
 
         except Exception as exc:
-            logger.error("Agent processing error: %s", exc, exc_info=True)
-            await safe_send_text("server.error", {"code": "agent_error", "message": "Processing failed", "fatal": False})
+            consecutive_errors[0] += 1
+            logger.error(
+                "Agent processing error (consecutive=%d): %s",
+                consecutive_errors[0], exc, exc_info=True,
+            )
+            if consecutive_errors[0] >= 3:
+                logger.error(
+                    "Call %s: 3 consecutive agent errors — ending call cleanly",
+                    session.call_id,
+                )
+                try:
+                    await _send_tts(
+                        "I'm sorry, I'm having technical difficulties. "
+                        "Someone will follow up with you shortly. Goodbye!",
+                        f"err-{seq[0] + 1}",
+                    )
+                except Exception:
+                    pass
+                await _finalize_call("agent_error")
+            else:
+                # Transient error — speak a recovery phrase so caller isn't left in silence
+                try:
+                    await safe_send_text("server.error", {"code": "agent_error", "message": "Processing failed", "fatal": False})
+                    recovery = "I'm sorry, something went wrong on my end. Could you please repeat that?"
+                    await safe_send_text("server.response_text", {"text": recovery, "audio_id": f"err-{seq[0] + 1}"})
+                    await _send_tts(recovery, f"err-{seq[0] + 1}")
+                except Exception:
+                    pass
 
     # ── Completion ────────────────────────────────────────────────────────────
 
