@@ -506,9 +506,24 @@ def list_available_slots(
         return _list_dummy_slots(purpose)
 
     # Auto-discover the event type when none is explicitly configured.
-    resolved_uri = event_type_uri or _discover_event_type_uri(
-        calendly_cfg["api_token"], calendly_cfg.get("scheduling_link")
-    )
+    # Also resolve scheduling URLs (https://calendly.com/...) to API URIs
+    # (https://api.calendly.com/event_types/{uuid}) — the available_times
+    # endpoint only accepts the API URI form.
+    raw_uri = event_type_uri or calendly_cfg.get("scheduling_link")
+    if raw_uri and not raw_uri.startswith("https://api.calendly.com/"):
+        # It's a scheduling URL — look it up via the event types list
+        resolved_uri = _discover_event_type_uri(calendly_cfg["api_token"], raw_uri)
+        if not resolved_uri:
+            logger.warning(
+                "Could not resolve scheduling URL %r to an API URI — falling back to first event type",
+                raw_uri,
+            )
+            resolved_uri = _discover_event_type_uri(calendly_cfg["api_token"], None)
+    else:
+        resolved_uri = raw_uri or _discover_event_type_uri(
+            calendly_cfg["api_token"], calendly_cfg.get("scheduling_link")
+        )
+
     if resolved_uri:
         return _list_calendly_slots(calendly_cfg, resolved_uri, search_start, search_end)
 
@@ -527,12 +542,10 @@ def book_time_slot(slot: TimeSlot, collected: dict, config: dict) -> dict:
     if not calendly_cfg:
         return _book_dummy_slot(slot, collected)
 
-    # If the slot was built from a Calendly query it already carries the URI.
-    # If somehow it doesn't (e.g. a test slot), try to discover one.
-    if not slot.event_type_uri:
-        discovered = _discover_event_type_uri(
-            calendly_cfg["api_token"], calendly_cfg.get("scheduling_link")
-        )
+    # Ensure the slot carries an API URI, not a scheduling URL.
+    if not slot.event_type_uri or not slot.event_type_uri.startswith("https://api.calendly.com/"):
+        scheduling_link = slot.event_type_uri if slot.event_type_uri else calendly_cfg.get("scheduling_link")
+        discovered = _discover_event_type_uri(calendly_cfg["api_token"], scheduling_link)
         if discovered:
             slot.event_type_uri = discovered
 
