@@ -257,6 +257,16 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             )
 
             graph.update(agent_id, response, current_turn)
+            logger.info(
+                "Agent response | agent=%s | status=%s | speak=%r | "
+                "collected=%s | pending_confirm=%s | requires_resume=%s",
+                agent_id,
+                response.status.value,
+                (response.speak or "")[:120],
+                list(response.collected.keys()) if response.collected else [],
+                response.pending_confirmation,
+                response.requires_router_resume,
+            )
 
             # Handle interrupt-eligible agent that is done — check resume stack
             if response.requires_router_resume:
@@ -275,6 +285,13 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                         )
                     )
                     graph.update(resume_id, resume_response, current_turn)
+                    logger.info(
+                        "Agent response (resumed) | agent=%s | status=%s | speak=%r | collected=%s",
+                        resume_id,
+                        resume_response.status.value,
+                        (resume_response.speak or "")[:120],
+                        list(resume_response.collected.keys()) if resume_response.collected else [],
+                    )
                     # Compose: interrupt answer + resume question
                     speak = ""
                     if response.speak:
@@ -355,6 +372,11 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                     )
                 )
                 graph.update(auto_node.id, auto_response, current_turn)
+                logger.info(
+                    "Agent response (auto-run) | agent=%s | status=%s",
+                    auto_node.id,
+                    auto_response.status.value,
+                )
 
                 # If the webhook agent stored dispatch params, fire them async
                 dispatch_params = auto_response.internal_state.get("_webhook_dispatch")

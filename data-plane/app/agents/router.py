@@ -70,9 +70,17 @@ class Router:
             agent_id = result.get("agent_id", "")
             interrupt = result.get("interrupt", False)
             reasoning = result.get("reasoning", "")
+
+            # Log full routing context at INFO level
             logger.info(
-                "Router selected agent=%s interrupt=%s reasoning=%r",
+                "Router decision | agent=%s | interrupt=%s | reasoning=%r\n"
+                "  utterance: %r\n"
+                "  status block:\n%s\n"
+                "  available:\n%s",
                 agent_id, interrupt, reasoning,
+                utterance[:120],
+                "\n".join(f"    {l}" for l in status_block.splitlines()),
+                "\n".join(f"    {l}" for l in available_block.splitlines()),
             )
 
             # Validate selection is actually available
