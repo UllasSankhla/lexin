@@ -66,7 +66,7 @@ class Router:
         )
 
         try:
-            result = llm_json_call(_ROUTER_SYSTEM, user_msg, max_tokens=80)
+            result = llm_json_call(_ROUTER_SYSTEM, user_msg, max_tokens=150)
             agent_id = result.get("agent_id", "")
             interrupt = result.get("interrupt", False)
             reasoning = result.get("reasoning", "")
