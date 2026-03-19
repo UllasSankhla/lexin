@@ -228,10 +228,14 @@ class NarrativeCollectionAgent(AgentBase):
         return SubagentResponse(
             status=AgentStatus.COMPLETED,
             speak=speak or "Thank you for sharing that. I've noted the details of your matter.",
+            # narrative_summary is the only field shown to the caller in the UI
             collected={
                 "narrative_summary": summary,
-                "case_type": case_type,
+            },
+            # full_narrative and case_type are backend-only: logged + passed to webhook, not displayed
+            hidden_collected={
                 "full_narrative": full_narrative,
+                "case_type": case_type,
             },
             internal_state=internal_state,
         )

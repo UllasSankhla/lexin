@@ -210,9 +210,9 @@ def test_done_response_not_added_to_segments(mock_json, mock_text):
     original_segment_count = len(state["segments"])
 
     resp, _ = _call("No that's all", state)
-    assert "No that's all" not in resp.collected["full_narrative"]
+    assert "No that's all" not in resp.hidden_collected["full_narrative"]
     # Segment count should not have grown
-    assert len(resp.collected["full_narrative"].split(". ")) <= original_segment_count + 1
+    assert len(resp.hidden_collected["full_narrative"].split(". ")) <= original_segment_count + 1
 
 
 @patch("app.agents.narrative_collection.llm_text_call", return_value="Noted.")
@@ -225,7 +225,7 @@ def test_additional_content_added_to_segments_when_not_done(mock_json, mock_text
     ]
     extra = "I also sustained a back injury and missed three weeks of work."
     resp, _ = _call(extra, _asking_done_state())
-    assert extra in resp.collected["full_narrative"]
+    assert extra in resp.hidden_collected["full_narrative"]
 
 
 # ── [BUG-C] Prompt framing ────────────────────────────────────────────────────
@@ -261,8 +261,8 @@ def test_completed_collected_dict(mock_json, mock_text):
     ]
     resp, _ = _call("No", _asking_done_state())
     assert resp.collected["narrative_summary"] == "Car accident on highway."
-    assert resp.collected["case_type"] == "personal injury"
-    assert resp.collected["full_narrative"]
+    assert resp.hidden_collected["case_type"] == "personal injury"
+    assert resp.hidden_collected["full_narrative"]
 
 
 @patch("app.agents.narrative_collection.llm_text_call", return_value="Noted.")
@@ -275,7 +275,7 @@ def test_full_narrative_is_segment_join(mock_json, mock_text):
     segs = ["First part of narrative.", "Second part of narrative."]
     state = {**_asking_done_state(), "segments": segs}
     resp, _ = _call("No", state)
-    assert resp.collected["full_narrative"] == " ".join(segs)
+    assert resp.hidden_collected["full_narrative"] == " ".join(segs)
 
 
 # ── Resume handling ───────────────────────────────────────────────────────────
@@ -327,4 +327,4 @@ def test_summarise_failure_uses_fallback(mock_json, mock_text):
     resp, _ = _call("No", _asking_done_state())
     assert resp.status == AgentStatus.COMPLETED
     assert resp.collected["narrative_summary"]
-    assert resp.collected["case_type"]
+    assert resp.hidden_collected["case_type"]

@@ -234,6 +234,15 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                         validated=True,
                     ))
             db_session.commit()
+        if response.hidden_collected:
+            # Backend-only fields: accumulate for webhook/downstream but do NOT send UI events
+            for field_name, field_value in response.hidden_collected.items():
+                if field_name not in collected_all:
+                    collected_all[field_name] = field_value
+                    logger.info(
+                        "hidden_collected | field=%s | value=%r",
+                        field_name, str(field_value)[:120],
+                    )
         if response.notes:
             nonlocal notes_buffer
             notes_buffer = response.notes

@@ -17,8 +17,10 @@ class AgentStatus(str, Enum):
 class SubagentResponse:
     status: AgentStatus
     speak: str = ""
-    # DataCollection: confirmed field values {name: value}
+    # DataCollection: confirmed field values {name: value} — sent to UI as parameter_collected events
     collected: dict[str, str] = field(default_factory=dict)
+    # Backend-only fields: accumulated in collected_all (for webhook/downstream) but NOT sent to UI
+    hidden_collected: dict[str, str] = field(default_factory=dict)
     # DataCollection: field + extracted value awaiting yes/no {"field": "name", "value": "John"}
     pending_confirmation: dict | None = None
     # Fallback: running notes text appended each invocation
