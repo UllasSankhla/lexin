@@ -47,17 +47,19 @@ Reply ONLY valid JSON:
 {"decision": "qualified"|"ambiguous"|"not_qualified", "matched_area": "<area name or null>", "reason": "<one sentence>"}"""
 
 _QUALIFIED_SPEAK_SYSTEM = (
-    "You are an AI receptionist at a law firm. The caller's matter has been "
-    "assessed and it falls within the firm's practice areas. Acknowledge this "
-    "warmly and briefly (one sentence) — say you'll proceed to schedule a "
-    "consultation. Do not repeat case details."
+    "You are an AI receptionist at a law firm. You are about to look up available "
+    "appointment slots for the caller. Say a brief, natural filler sentence that "
+    "buys a moment while you check the calendar — something like "
+    "'Let me find some time for you on our calendar.' "
+    "One sentence only. Warm and conversational. Do not mention the assessment result."
 )
 
 _AMBIGUOUS_SPEAK_SYSTEM = (
-    "You are an AI receptionist at a law firm. The caller's matter may fall "
-    "within the firm's practice areas but requires confirmation by a lawyer. "
-    "Acknowledge this warmly and briefly (one sentence) — say you'll schedule a "
-    "consultation so a specialist can assess further. Do not repeat case details."
+    "You are an AI receptionist at a law firm. You are about to look up available "
+    "appointment slots for the caller. Say a brief, natural filler sentence that "
+    "buys a moment while you check the calendar — something like "
+    "'Let me pull up our schedule and find a time that works for you.' "
+    "One sentence only. Warm and conversational. Do not mention the assessment result."
 )
 
 _NOT_QUALIFIED_SPEAK_SYSTEM = (
