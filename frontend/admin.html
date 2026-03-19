@@ -1335,7 +1335,7 @@ async function loadDashboard() {
     if (!data.calls.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No calls yet</td></tr>'; return; }
     body.innerHTML = data.calls.map(c => `
       <tr style="cursor:pointer" onclick="openCallDetail('${esc(c.id)}')">
-        <td><strong>${esc(c.caller_name)}</strong></td>
+        <td><strong>${esc(callerDisplay(c))}</strong></td>
         <td>${stateBadge(c.state)}</td>
         <td>${fmtDuration(c.duration_sec)}</td>
         <td>${fmtDate(c.started_at)}</td>
@@ -1346,6 +1346,12 @@ async function loadDashboard() {
 
 // ── CALLS ────────────────────────────────────────────────────────────────────
 let searchTimer;
+function callerDisplay(c) {
+  const p = c.name_params || {};
+  const full = [p.first_name, p.last_name].filter(Boolean).join(' ');
+  if (full) return full;
+  return p.client_name || p.client_full_name || p.caller_name || p.name || c.caller_name || 'Unknown Caller';
+}
 function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(loadCalls, 350); }
 
 async function loadCalls() {
@@ -1361,7 +1367,7 @@ async function loadCalls() {
     if (!data.calls.length) { body.innerHTML = '<tr><td colspan="6" class="table-empty">No calls found</td></tr>'; return; }
     body.innerHTML = data.calls.map(c => `
       <tr>
-        <td><strong>${esc(c.caller_name)}</strong></td>
+        <td><strong>${esc(callerDisplay(c))}</strong></td>
         <td>${stateBadge(c.state)}</td>
         <td>${fmtDuration(c.duration_sec)}</td>
         <td>${fmtDate(c.started_at)}</td>

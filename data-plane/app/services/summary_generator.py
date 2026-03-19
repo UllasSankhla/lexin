@@ -50,32 +50,52 @@ def generate_call_summary(
         if first or last:
             caller_name = " ".join(filter(None, [first, last]))
 
-    caller_name = caller_name or "Unknown Caller"
-
     if not transcript_lines:
-        return caller_name, "No transcript available for this call."
+        return caller_name or "Unknown Caller", "No transcript available for this call."
 
     # Build condensed transcript (limit to avoid token overflow)
     transcript_text = "\n".join(transcript_lines[-40:])  # last 40 lines
 
-    prompt = f"""You are summarizing a completed voice appointment booking call.
-Based on the transcript below, write a concise 2-3 sentence summary covering:
-- The caller's purpose/reason for calling
-- What information was collected
-- The outcome of the call
+    client = Cerebras(api_key=settings.cerebras_api_key)
 
-Be friendly and factual. Write in third person. Do not use bullet points.
+    # If no name found from collected params, try extracting it from the transcript
+    if not caller_name:
+        try:
+            name_response = _call_with_retry(
+                client,
+                model=settings.cerebras_model,
+                messages=[
+                    {"role": "system", "content": (
+                        "Extract the caller's full name from a call transcript. "
+                        "Reply with ONLY the name (e.g. 'Jane Smith'). "
+                        "If no name is mentioned, reply with exactly: Unknown Caller"
+                    )},
+                    {"role": "user", "content": transcript_text},
+                ],
+                max_tokens=20,
+                temperature=0,
+            )
+            extracted = name_response.choices[0].message.content.strip()
+            if extracted and extracted.lower() != "unknown caller":
+                caller_name = extracted
+                logger.info("Extracted caller name from transcript: %r", caller_name)
+        except Exception as exc:
+            logger.warning("Transcript name extraction failed: %s", exc)
 
-TRANSCRIPT:
-{transcript_text}
+    caller_name = caller_name or "Unknown Caller"
 
-COLLECTED DATA:
-{', '.join(f"{k}: {v}" for k, v in collected_params.items()) if collected_params else "None"}
-
-SUMMARY:"""
+    prompt = (
+        "You are summarizing a completed voice call.\n"
+        "Write a concise 2-3 sentence summary covering the caller's purpose, "
+        "what information was collected, and the outcome. "
+        "Be factual, write in third person, no bullet points.\n\n"
+        f"TRANSCRIPT:\n{transcript_text}\n\n"
+        f"COLLECTED DATA:\n"
+        f"{', '.join(f'{k}: {v}' for k, v in collected_params.items()) if collected_params else 'None'}\n\n"
+        "SUMMARY:"
+    )
 
     try:
-        client = Cerebras(api_key=settings.cerebras_api_key)
         response = _call_with_retry(
             client,
             model=settings.cerebras_model,

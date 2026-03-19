@@ -122,9 +122,29 @@ def list_calls(
         )
     total = q.count()
     records = q.order_by(CallRecord.started_at.desc()).offset(offset).limit(limit).all()
+
+    # Bulk-fetch name-related gathered parameters so the UI can display them
+    call_ids = [r.id for r in records]
+    name_rows = (
+        db.query(GatheredParameter)
+        .filter(
+            GatheredParameter.call_id.in_(call_ids),
+            GatheredParameter.parameter_name.in_(
+                ["first_name", "last_name", "client_name", "client_full_name", "caller_name", "name"]
+            ),
+        )
+        .all()
+    ) if call_ids else []
+    name_params_by_call: dict[str, dict] = {}
+    for p in name_rows:
+        name_params_by_call.setdefault(p.call_id, {})[p.parameter_name] = p.raw_value
+
     return {
         "total": total,
-        "calls": [_format_call(r) for r in records],
+        "calls": [
+            {**_format_call(r), "name_params": name_params_by_call.get(r.id, {})}
+            for r in records
+        ],
     }
 
 
