@@ -11,20 +11,32 @@ logger = logging.getLogger(__name__)
 def generate_call_summary(
     transcript_lines: list[str],
     collected_params: dict,
+    config: dict | None = None,
 ) -> tuple[str, str]:
     """
     Generate a brief AI summary of a completed call.
     Returns (caller_name, summary_text).
     Runs synchronously — call via run_in_executor.
     """
-    # Extract caller name directly from collected params
-    caller_name = (
-        collected_params.get("client_name")
-        or collected_params.get("client_full_name")
-        or collected_params.get("caller_name")
-        or collected_params.get("name")
-        or "Unknown Caller"
-    )
+    # Try to find the caller name using the config's parameter definitions first.
+    # This handles any field name the operator configured with data_type="name".
+    caller_name = None
+    if config:
+        for param in config.get("parameters", []):
+            if param.get("data_type") == "name":
+                caller_name = collected_params.get(param["name"]) or None
+                if caller_name:
+                    break
+
+    # Fall back to common hardcoded key names if config lookup didn't find one
+    if not caller_name:
+        caller_name = (
+            collected_params.get("client_name")
+            or collected_params.get("client_full_name")
+            or collected_params.get("caller_name")
+            or collected_params.get("name")
+            or "Unknown Caller"
+        )
 
     if not transcript_lines:
         return caller_name, "No transcript available for this call."

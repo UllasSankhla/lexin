@@ -498,6 +498,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 lambda: generate_call_summary(
                     session.transcript_lines,
                     collected_all,
+                    config,
                 ),
             )
         except Exception as exc:
