@@ -1,8 +1,9 @@
 """Static workflow definition for the appointment booking use-case."""
 from app.agents.workflow import (
     WorkflowDefinition, ActivityNode, Edge,
-    GoalSpec, DeciderSpec, InterruptPolicy, ErrorPolicy,
+    GoalSpec, DeciderSpec, InterruptPolicy, ErrorPolicy, ToolBinding,
 )
+from app.tools.base import ToolTrigger
 
 APPOINTMENT_BOOKING = WorkflowDefinition(
 
@@ -143,15 +144,39 @@ Respond ONLY with valid JSON:
             on_continue=Edge("decider"),
         ),
 
-        ActivityNode(
-            id="webhook",
-            agent_class="WebhookAgent",
-            description="Dispatches call summary and collected data to configured endpoints.",
-            auto_run=True,
-            depends_on=["scheduling"],
-            on_complete=Edge("end"),
-            on_failed=Edge("end", "webhook_failed"),
-            on_continue=Edge("end"),
+    ],
+
+    # ── Tools ─────────────────────────────────────────────────────────────────
+    # Non-conversational async work units invoked by the workflow at lifecycle
+    # trigger points.  They do not appear as graph nodes and cannot speak to
+    # the caller.  CALL_END tools run sequentially in declaration order inside
+    # a single background task (so each can read ctx.shared written by the
+    # previous one).  AGENT_COMPLETE tools with fire_and_forget=False are
+    # started immediately as asyncio.Tasks and awaited before the next agent
+    # in the chain runs, enabling parallel network calls.
+    tools=[
+        # Start fetching calendar slots the moment intake_qualification finishes
+        # its LLM call — overlapping with the graph edge resolution so the slots
+        # are ready (or nearly so) by the time SchedulingAgent._present_slots runs.
+        ToolBinding(
+            tool_class="CalendarPrefetchTool",
+            trigger=ToolTrigger.AGENT_COMPLETE,
+            agent_id="narrative_collection",  # starts when narrative completes
+            fire_and_forget=False,
+            await_before_agent="scheduling",  # only awaited before scheduling runs,
+                                              # so it overlaps with the intake_qualification LLM call
+        ),
+        # Post-call: summarise first so WebhookTool can read caller_name/ai_summary
+        # from ctx.shared without an extra DB query.
+        ToolBinding(
+            tool_class="SummarizationTool",
+            trigger=ToolTrigger.CALL_END,
+            fire_and_forget=True,    # entire CALL_END group runs as one background task
+        ),
+        ToolBinding(
+            tool_class="WebhookTool",
+            trigger=ToolTrigger.CALL_END,
+            fire_and_forget=True,
         ),
     ],
 

@@ -16,11 +16,20 @@ caller questions — it is a one-shot auto-decision node.
 from __future__ import annotations
 
 import logging
+import random
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
 from app.agents.llm_utils import llm_json_call, llm_text_call
 
 logger = logging.getLogger(__name__)
+
+_CALENDAR_FILLERS = [
+    "Let me find some time for you on our calendar.",
+    "Let me pull up our schedule and find a time that works for you.",
+    "One moment while I check our availability for you.",
+    "Let me look at what times we have open for you.",
+    "Give me just a moment while I check the calendar.",
+]
 
 # ── Prompt constants ──────────────────────────────────────────────────────────
 
@@ -46,21 +55,6 @@ Decision rules:
 Reply ONLY valid JSON:
 {"decision": "qualified"|"ambiguous"|"not_qualified", "matched_area": "<area name or null>", "reason": "<one sentence>"}"""
 
-_QUALIFIED_SPEAK_SYSTEM = (
-    "You are an AI receptionist at a law firm. You are about to look up available "
-    "appointment slots for the caller. Say a brief, natural filler sentence that "
-    "buys a moment while you check the calendar — something like "
-    "'Let me find some time for you on our calendar.' "
-    "One sentence only. Warm and conversational. Do not mention the assessment result."
-)
-
-_AMBIGUOUS_SPEAK_SYSTEM = (
-    "You are an AI receptionist at a law firm. You are about to look up available "
-    "appointment slots for the caller. Say a brief, natural filler sentence that "
-    "buys a moment while you check the calendar — something like "
-    "'Let me pull up our schedule and find a time that works for you.' "
-    "One sentence only. Warm and conversational. Do not mention the assessment result."
-)
 
 _NOT_QUALIFIED_SPEAK_SYSTEM = (
     "You are an AI receptionist at a law firm. The caller's matter does not fall "
@@ -260,11 +254,7 @@ class IntakeQualificationAgent(AgentBase):
             )
 
         # qualified or ambiguous → proceed to scheduling
-        speak_system = _QUALIFIED_SPEAK_SYSTEM if decision == "qualified" else _AMBIGUOUS_SPEAK_SYSTEM
-        speak = llm_text_call(speak_system, reason) or (
-            "Great, your matter looks like something we can assist with — "
-            "let's go ahead and schedule a consultation."
-        )
+        speak = random.choice(_CALENDAR_FILLERS)
         return SubagentResponse(
             status=AgentStatus.COMPLETED,
             speak=speak,

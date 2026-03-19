@@ -83,42 +83,50 @@ class SchedulingAgent(AgentBase):
         return llm_text_call(_SPEAK_SLOTS_SYSTEM, f"Slots: {slot_list}")
 
     def _present_slots(self, utterance: str, internal_state: dict, config: dict) -> SubagentResponse:
-        # Pull collected data from graph state via config passthrough
-        # (the handler injects collected params into config["_collected"])
-        collected = config.get("_collected", {})
+        # Use pre-fetched slots if CalendarPrefetchTool already ran concurrently
+        # with the intake_qualification LLM call — avoids a redundant API round-trip.
+        prefetched = config.get("_tool_results", {}).get("prefetched_slots")
+        if prefetched is not None:
+            slots = prefetched
+            internal_state["matched_event_type_uri"] = None
+        else:
+            # Pull collected data from graph state via config passthrough
+            # (the handler injects collected params into config["_collected"])
+            collected = config.get("_collected", {})
 
-        # Derive purpose
-        purpose = (
-            collected.get("purpose") or collected.get("reason") or
-            collected.get("service") or collected.get("appointment_type") or
-            config.get("assistant", {}).get("persona_description", "appointment")
-        )
+            # Derive purpose
+            purpose = (
+                collected.get("purpose") or collected.get("reason") or
+                collected.get("service") or collected.get("appointment_type") or
+                config.get("assistant", {}).get("persona_description", "appointment")
+            )
 
-        # Match event type via LLM if event types configured
-        event_types = config.get("calendly_event_types") or []
-        matched_uri = None
-        if event_types:
-            try:
-                result = llm_json_call(
-                    "Match a booking purpose to an event type. Return JSON: {\"index\": <0-based int>} or {\"index\": null}.",
-                    f"Purpose: \"{purpose}\"\nEvent types:\n" +
-                    "\n".join(f"{i}. {et['name']}" + (f" — {et['description']}" if et.get('description') else "") for i, et in enumerate(event_types)),
-                )
-                idx = result.get("index")
-                if idx is not None and 0 <= int(idx) < len(event_types):
-                    matched_uri = event_types[int(idx)]["event_type_uri"]
-            except Exception as exc:
-                logger.warning("SchedulingAgent event type match failed: %s", exc)
-            if not matched_uri:
-                matched_uri = event_types[0]["event_type_uri"]
+            # Match event type via LLM if event types configured
+            event_types = config.get("calendly_event_types") or []
+            matched_uri = None
+            if event_types:
+                try:
+                    result = llm_json_call(
+                        "Match a booking purpose to an event type. Return JSON: {\"index\": <0-based int>} or {\"index\": null}.",
+                        f"Purpose: \"{purpose}\"\nEvent types:\n" +
+                        "\n".join(f"{i}. {et['name']}" + (f" — {et['description']}" if et.get('description') else "") for i, et in enumerate(event_types)),
+                    )
+                    idx = result.get("index")
+                    if idx is not None and 0 <= int(idx) < len(event_types):
+                        matched_uri = event_types[int(idx)]["event_type_uri"]
+                except Exception as exc:
+                    logger.warning("SchedulingAgent event type match failed: %s", exc)
+                if not matched_uri:
+                    matched_uri = event_types[0]["event_type_uri"]
 
-        internal_state["matched_event_type_uri"] = matched_uri
+            internal_state["matched_event_type_uri"] = matched_uri
 
-        now = datetime.now(timezone.utc)
-        search_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        search_end = search_start + timedelta(days=7)
+            now = datetime.now(timezone.utc)
+            search_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            search_end = search_start + timedelta(days=7)
 
-        slots = list_available_slots(purpose, config, matched_uri, search_start=search_start, search_end=search_end)
+            slots = list_available_slots(purpose, config, matched_uri, search_start=search_start, search_end=search_end)
+
         # Store slots as serializable dicts — use isoformat for datetime fields
         internal_state["available_slots"] = [
             {

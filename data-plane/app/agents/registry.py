@@ -9,7 +9,6 @@ from app.agents.faq import FAQAgent
 from app.agents.context_docs import ContextDocsAgent
 from app.agents.fallback import FallbackAgent
 from app.agents.scheduling import SchedulingAgent
-from app.agents.webhook_agent import WebhookAgent
 
 
 def build_registry(call_id: str, transcript: list[dict]) -> dict[str, AgentBase]:
@@ -22,5 +21,4 @@ def build_registry(call_id: str, transcript: list[dict]) -> dict[str, AgentBase]
         "narrative_collection":  NarrativeCollectionAgent(),
         "intake_qualification":  IntakeQualificationAgent(),
         "scheduling":            SchedulingAgent(),
-        "webhook":               WebhookAgent(call_id=call_id, transcript=transcript),
     }

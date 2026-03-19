@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from app.agents.base import AgentStatus, SubagentResponse
+from app.tools.base import ToolBinding  # noqa: F401 — re-exported for graph_config convenience
 
 
 # ── WorkflowDefinition schema ─────────────────────────────────────────────────
@@ -71,6 +72,9 @@ class WorkflowDefinition:
     nodes: list[ActivityNode]
     interrupt_policy: InterruptPolicy
     error_policy: ErrorPolicy
+    # Tools declared here are invoked by the workflow at lifecycle trigger points.
+    # They are non-conversational and distinct from agent nodes.
+    tools: list[ToolBinding] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         node_ids = {n.id for n in self.nodes}

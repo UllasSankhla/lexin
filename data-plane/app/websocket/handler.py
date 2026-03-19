@@ -33,9 +33,9 @@ from app.agents.base import AgentStatus
 from app.pipeline.stt import STTSession
 from app.pipeline.tts import TTSClient
 from app.services.config_client import get_cached_config
-from app.services.summary_generator import generate_call_summary
 from app.services.transcript_store import save_transcript
-from app.services.webhook_dispatcher import dispatch_webhooks
+from app.tools.base import ToolTrigger, ToolContext
+from app.tools.registry import resolve_tool
 from app.websocket.session import CallSession
 from app.websocket.state_machine import CallState
 
@@ -47,17 +47,6 @@ logger = logging.getLogger(__name__)
 def _encode_audio_frame(audio_id: str, audio_bytes: bytes) -> bytes:
     id_bytes = audio_id.encode("utf-8")
     return struct.pack("<I", len(id_bytes)) + id_bytes + audio_bytes
-
-
-async def _send_json(ws: WebSocket, msg_type: str, payload: dict, seq: list) -> None:
-    seq[0] += 1
-    logger.debug("→ [%d] %s %s", seq[0], msg_type, payload)
-    await ws.send_text(json.dumps({
-        "type": msg_type,
-        "seq": seq[0],
-        "ts": time.time(),
-        "payload": payload,
-    }))
 
 
 # ── Main handler ──────────────────────────────────────────────────────────────
@@ -78,7 +67,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     collected_all: dict[str, str] = {}   # accumulates confirmed fields across turns
     booking_result: dict = {}
     notes_buffer: str = ""
-    transcript_turns: list[dict] = []    # for webhook agent
+    transcript_turns: list[dict] = []    # for decider history and transcript store
 
     router = Router(graph)
     registry = build_registry(session.call_id, transcript_turns)
@@ -94,6 +83,16 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
     # Timestamp of the last STT final event — used to measure end-to-end response latency.
     last_utterance_t: list[float] = [0.0]
+
+    # Shared mutable store across all tool invocations for this call.
+    # Tools write results here; subsequent tools and agents read from it via
+    # config["_tool_results"].
+    tool_shared: dict = {}
+
+    # Tracks pending (fire_and_forget=False) tool tasks keyed by tool_class name.
+    # Value is (task, await_before_agent) where await_before_agent is the agent_id
+    # that should trigger the await, or None to await before any agent.
+    pending_tool_tasks: dict[str, tuple[asyncio.Task, str | None]] = {}
 
     # ── Send helpers (priority queue: 0=audio, 1=text, 2=sentinel) ───────────
     # Single send loop serialises all WebSocket writes; audio frames are
@@ -271,40 +270,74 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 record.booking_status = response.booking.get("status")
                 db_session.commit()
 
-    async def _run_auto_agents(current_turn: int, loop) -> None:
-        """Invoke auto_run agents whose dependencies are now satisfied."""
-        for auto_node in graph.auto_run_ready():
-            auto_agent = registry[auto_node.id]
-            auto_state = graph.states[auto_node.id]
-            enriched_config2 = {
-                **config,
-                "_collected": collected_all,
-                "_booking": booking_result,
-                "_notes": notes_buffer,
-            }
-            auto_response = await loop.run_in_executor(
-                None,
-                lambda: auto_agent.process(
-                    "", dict(auto_state.internal_state), enriched_config2, []
+    def _make_tool_ctx(
+        transcript_path: str | None = None,
+        duration_sec: float | None = None,
+        booking_override: dict | None = None,
+    ) -> ToolContext:
+        """Build a ToolContext snapshot for the current call state."""
+        return ToolContext(
+            call_id=session.call_id,
+            config=config,
+            collected=dict(collected_all),
+            transcript_lines=list(session.transcript_lines),
+            booking_result=booking_override if booking_override is not None else booking_result,
+            duration_sec=duration_sec if duration_sec is not None else session.duration_sec(),
+            transcript_path=transcript_path,
+            shared=tool_shared,
+        )
+
+    async def _invoke_tools(trigger: ToolTrigger, agent_id: str | None = None) -> None:
+        """Start AGENT_COMPLETE tools matching (trigger, agent_id).
+
+        fire_and_forget=False tools are stored in pending_tool_tasks and awaited
+        by _await_pending_tools() before the appropriate agent runs.
+        fire_and_forget=True tools run independently in the background.
+        CALL_END tools are handled directly by _finalize_call.
+        """
+        if trigger == ToolTrigger.CALL_END:
+            return  # handled by _finalize_call via _run_call_end_tools
+
+        bindings = [
+            b for b in graph.workflow.tools
+            if b.trigger == trigger
+            and (b.agent_id is None or b.agent_id == agent_id)
+        ]
+        if not bindings:
+            return
+
+        for binding in bindings:
+            tool = resolve_tool(binding.tool_class)
+            ctx  = _make_tool_ctx()
+            task = asyncio.create_task(tool.run(ctx))
+            if not binding.fire_and_forget:
+                pending_tool_tasks[binding.tool_class] = (task, binding.await_before_agent)
+                logger.debug(
+                    "Tool %s started (pending, await_before=%s)",
+                    binding.tool_class, binding.await_before_agent or "any",
                 )
-            )
-            graph.update(auto_node.id, auto_response, current_turn)
-            logger.info(
-                "Agent response (auto-run) | agent=%s | status=%s",
-                auto_node.id, auto_response.status.value,
-            )
-            dispatch_params = auto_response.internal_state.get("_webhook_dispatch")
-            if dispatch_params:
-                asyncio.create_task(dispatch_webhooks(
-                    config=config,
-                    call_id=dispatch_params["call_id"],
-                    duration_sec=session.duration_sec(),
-                    collected=dispatch_params["collected"],
-                    transcript_path=None,
-                    caller_name=dispatch_params.get("caller_name", ""),
-                    ai_summary=dispatch_params.get("ai_summary", ""),
-                    booking_details=dispatch_params.get("booking"),
-                ))
+            else:
+                logger.debug("Tool %s started (fire-and-forget)", binding.tool_class)
+
+    async def _await_pending_tools(current_agent_id: str) -> None:
+        """Await pending tool tasks that should complete before current_agent_id runs.
+
+        Tasks with await_before_agent=None are awaited before any agent.
+        Tasks with await_before_agent set are only awaited before that specific agent.
+        Results land in tool_shared, exposed to agents via config["_tool_results"].
+        """
+        for name, (task, await_before) in list(pending_tool_tasks.items()):
+            if await_before is not None and await_before != current_agent_id:
+                continue
+            try:
+                result = await task
+                logger.info(
+                    "Tool %s completed — success=%s data=%s",
+                    name, result.success, result.data,
+                )
+            except Exception as exc:
+                logger.warning("Tool %s raised an exception: %s", name, exc)
+            del pending_tool_tasks[name]
 
     async def _invoke_and_follow(
         agent_id: str,
@@ -324,11 +357,16 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         """
         MAX_CHAIN = 5
 
+        # Await pending tool tasks whose await_before_agent matches this agent —
+        # results land in tool_shared, exposed to the agent via config["_tool_results"].
+        await _await_pending_tools(agent_id)
+
         enriched_config = {
             **config,
-            "_collected": collected_all,
-            "_booking": booking_result,
-            "_notes": notes_buffer,
+            "_collected":    dict(collected_all),   # copy — agents must not mutate handler state
+            "_booking":      booking_result,
+            "_notes":        notes_buffer,
+            "_tool_results": tool_shared,
         }
 
         agent = registry[agent_id]
@@ -357,6 +395,12 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         )
 
         await _persist_response(response)
+
+        # Fire AGENT_COMPLETE tools immediately after a COMPLETED response — before
+        # following the edge — so they start as early as possible (e.g. calendar
+        # pre-fetch overlaps with graph edge resolution and chain setup).
+        if response.status == AgentStatus.COMPLETED:
+            await _invoke_tools(ToolTrigger.AGENT_COMPLETE, agent_id)
 
         speak = response.speak or ""
 
@@ -407,7 +451,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         ]
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             # ── Step 1: select agent (WAITING_CONFIRM enforced before LLM) ───
             agent_id, interrupt = await loop.run_in_executor(
@@ -431,9 +475,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
             audio_id = f"resp-{seq[0] + 1}"
             await safe_send_text("server.response_text", {"text": speak_text, "audio_id": audio_id})
-
-            # ── Auto-run agents (webhook fires when scheduling COMPLETED) ─────
-            await _run_auto_agents(current_turn, loop)
 
             # ── TTS ───────────────────────────────────────────────────────────
             await _send_tts(speak_text, audio_id)
@@ -478,14 +519,19 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
     # ── Completion ────────────────────────────────────────────────────────────
 
-    async def _handle_completion(booking_details: dict | None = None) -> None:
-        session.state_machine.transition(CallState.COMPLETING)
-        await safe_send_text("server.call_completing", {
-            "collected_parameters": collected_all,
-            "booking": booking_details,
-        })
-        await asyncio.sleep(1)
-        await _finalize_call("completed", booking_details=booking_details)
+    async def _run_call_end_tools(ctx: ToolContext) -> None:
+        """Run CALL_END tool bindings sequentially so each can read ctx.shared written by the previous."""
+        bindings = [b for b in graph.workflow.tools if b.trigger == ToolTrigger.CALL_END]
+        for binding in bindings:
+            tool = resolve_tool(binding.tool_class)
+            try:
+                result = await tool.run(ctx)
+                logger.info(
+                    "CALL_END tool %s: success=%s data=%s",
+                    binding.tool_class, result.success, result.data,
+                )
+            except Exception as exc:
+                logger.warning("CALL_END tool %s raised: %s", binding.tool_class, exc)
 
     async def _finalize_call(reason: str, booking_details: dict | None = None) -> None:
         duration = session.duration_sec()
@@ -498,28 +544,15 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
         transcript_path = await save_transcript(session)
 
-        caller_name, ai_summary = "Unknown Caller", ""
-        try:
-            loop = asyncio.get_event_loop()
-            caller_name, ai_summary = await loop.run_in_executor(
-                None,
-                lambda: generate_call_summary(
-                    session.transcript_lines,
-                    collected_all,
-                    config,
-                ),
-            )
-        except Exception as exc:
-            logger.warning("Summary generation failed: %s", exc)
-
+        # Persist call record and analytics immediately so the DB reflects the
+        # completed state before we notify the client.  Summary/caller_name are
+        # filled in by the background task that runs after the WS closes.
         record = db_session.get(CallRecord, session.call_id)
         if record:
             record.state           = "done"
             record.completed_at    = datetime.now(timezone.utc)
             record.duration_sec    = duration
             record.transcript_path = transcript_path
-            record.caller_name     = caller_name
-            record.ai_summary      = ai_summary
             record.end_reason      = reason
             db_session.commit()
 
@@ -533,19 +566,20 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             "duration_sec": round(duration, 2),
         })
 
-        asyncio.create_task(dispatch_webhooks(
-            config=config,
-            call_id=session.call_id,
-            duration_sec=duration,
-            collected=collected_all,
+        # Fire CALL_END tools in a background task — moves the Cerebras summary
+        # call (≈500 ms–2 s) and webhook dispatch off the call-end critical path.
+        # Tools run sequentially so SummarizationTool can write to ctx.shared
+        # before WebhookTool reads from it.
+        call_end_ctx = _make_tool_ctx(
             transcript_path=transcript_path,
-            caller_name=caller_name,
-            ai_summary=ai_summary,
-            booking_details=booking_details,
-        ))
+            duration_sec=duration,
+            booking_override=booking_details if booking_details else (booking_result if booking_result else None),
+        )
+        asyncio.create_task(_run_call_end_tools(call_end_ctx))
+
         logger.info(
-            "Call %s finalized — reason: %s | duration: %.1fs | caller: %s",
-            session.call_id, reason, duration, caller_name,
+            "Call %s finalized — reason: %s | duration: %.1fs",
+            session.call_id, reason, duration,
         )
 
     # ── Main WebSocket loop ───────────────────────────────────────────────────
@@ -574,7 +608,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         await _send_tts(greeting_text, "greet-001")
 
         # Opening — invoke data_collection with empty utterance to get first question
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         graph.states["data_collection"].status = AgentStatus.IN_PROGRESS
         opening_speak, _ = await _invoke_and_follow(
             "data_collection", "", 0, loop, [], chain_depth=0
