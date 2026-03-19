@@ -1804,7 +1804,7 @@ async function loadWebhooks() {
     const hooks = await cp('/api/v1/webhooks');
     if (!hooks.length) { body.innerHTML = '<tr><td colspan="5" class="table-empty">No webhooks yet</td></tr>'; return; }
     body.innerHTML = hooks.map(h => {
-      const events = JSON.parse(h.events || '[]');
+      const events = Array.isArray(h.events) ? h.events : JSON.parse(h.events || '[]');
       return `
       <tr>
         <td><strong>${esc(h.name)}</strong></td>
