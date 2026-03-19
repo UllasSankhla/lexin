@@ -10,7 +10,9 @@ from app.models.spell_rule import SpellRule
 from app.models.webhook import WebhookEndpoint
 from app.models.calendly_config import CalendlyConfig
 from app.models.calendly_event_type import CalendlyEventType
-from app.services.file_storage import read_context_file
+from app.models.practice_area import PracticeArea
+from app.models.policy_document import PolicyDocument
+from app.services.file_storage import read_context_file, read_policy_document
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,23 @@ def build_config_export(db: Session, owner_id: str) -> dict:
     calendly_config = db.query(CalendlyConfig).filter(CalendlyConfig.owner_id == owner_id, CalendlyConfig.enabled == True).first()  # noqa
     calendly_event_types = db.query(CalendlyEventType).filter(CalendlyEventType.enabled == True).all()  # noqa
 
+    practice_areas_rows = (
+        db.query(PracticeArea)
+        .filter(PracticeArea.owner_id == owner_id, PracticeArea.enabled == True)  # noqa
+        .order_by(PracticeArea.display_order)
+        .all()
+    )
+
+    global_policy_docs_rows = (
+        db.query(PolicyDocument)
+        .filter(
+            PolicyDocument.owner_id == owner_id,
+            PolicyDocument.enabled == True,           # noqa
+            PolicyDocument.practice_area_id == None,  # noqa
+        )
+        .all()
+    )
+
     context_content = []
     for cf in context_files:
         content = read_context_file(cf.file_path)
@@ -47,6 +66,50 @@ def build_config_export(db: Session, owner_id: str) -> dict:
             context_content.append({
                 "name": cf.original_name,
                 "description": cf.description,
+                "content": content,
+            })
+
+    # Build practice_areas list with per-area policy doc content inlined
+    practice_areas_export = []
+    for area in practice_areas_rows:
+        area_docs = (
+            db.query(PolicyDocument)
+            .filter(
+                PolicyDocument.practice_area_id == area.id,
+                PolicyDocument.enabled == True,  # noqa
+            )
+            .all()
+        )
+        policy_docs_content = []
+        for doc in area_docs:
+            content = read_policy_document(doc.file_path)
+            if content:
+                policy_docs_content.append({
+                    "name": doc.original_name,
+                    "description": doc.description,
+                    "content": content,
+                })
+
+        practice_areas_export.append({
+            "id": area.id,
+            "name": area.name,
+            "description": area.description,
+            "qualification_criteria": area.qualification_criteria,
+            "disqualification_signals": area.disqualification_signals,
+            "ambiguous_signals": area.ambiguous_signals,
+            "referral_suggestion": area.referral_suggestion,
+            "display_order": area.display_order,
+            "policy_documents": policy_docs_content,
+        })
+
+    # Global policy documents (not tied to any specific practice area)
+    global_policy_docs_export = []
+    for doc in global_policy_docs_rows:
+        content = read_policy_document(doc.file_path)
+        if content:
+            global_policy_docs_export.append({
+                "name": doc.original_name,
+                "description": doc.description,
                 "content": content,
             })
 
@@ -114,10 +177,14 @@ def build_config_export(db: Session, owner_id: str) -> dict:
             }
             for et in calendly_event_types
         ],
+        "practice_areas": practice_areas_export,
+        "global_policy_documents": global_policy_docs_export,
     }
 
     logger.info(
-        "Config export built for owner=%s: %d params, %d FAQs, %d context files, %d webhooks",
-        owner_id, len(parameters), len(faqs), len(context_files), len(webhooks),
+        "Config export built for owner=%s: %d params, %d FAQs, %d context files, "
+        "%d webhooks, %d practice areas, %d global policy docs",
+        owner_id, len(parameters), len(faqs), len(context_files),
+        len(webhooks), len(practice_areas_rows), len(global_policy_docs_rows),
     )
     return export

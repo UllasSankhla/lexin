@@ -41,6 +41,7 @@ def _run_migrations(engine):
     tables_needing_owner_id = [
         "assistant_config", "collection_parameter", "faq",
         "webhook_endpoint", "context_file", "spell_rule", "calendly_config",
+        "practice_area", "policy_document",
     ]
     with engine.connect() as conn:
         insp = inspect(engine)
@@ -55,6 +56,7 @@ def _run_migrations(engine):
 
 def init_db():
     from app.models import assistant, parameter, faq, context_file, spell_rule, webhook, calendly_config, calendly_event_type, customer_key  # noqa
+    from app.models import practice_area, policy_document  # noqa
     _run_migrations(engine)
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created/verified")

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.routers import assistant, parameters, faqs, context_files, spell_rules, webhooks, config_export, calendly, customer_keys
+from app.routers import assistant, parameters, faqs, context_files, spell_rules, webhooks, config_export, calendly, customer_keys, practice_areas, policy_documents
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -48,6 +48,8 @@ app.include_router(webhooks.router)
 app.include_router(config_export.router)
 app.include_router(calendly.router)
 app.include_router(customer_keys.router)
+app.include_router(practice_areas.router)
+app.include_router(policy_documents.router)
 
 
 @app.get("/api/v1/health")

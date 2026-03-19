@@ -64,3 +64,56 @@ def read_context_file(file_path: str) -> str:
     except Exception as e:
         logger.error("Failed to read context file %s: %s", file_path, e)
         return ""
+
+
+# ── Policy document storage (same rules, separate directory) ──────────────────
+
+async def save_policy_document(file: UploadFile) -> dict:
+    """Save an uploaded policy document to the filesystem. Returns metadata dict."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"File type '{suffix}' not allowed")
+
+    content = await file.read()
+    size_bytes = len(content)
+    max_bytes = settings.max_context_file_size_mb * 1024 * 1024
+    if size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max size is {settings.max_context_file_size_mb}MB"
+        )
+
+    stored_name = f"{uuid.uuid4()}{suffix}"
+    dest_path = Path(settings.policy_documents_path) / stored_name
+    dest_path.write_bytes(content)
+    logger.info("Saved policy document %s (%d bytes)", stored_name, size_bytes)
+
+    return {
+        "filename": stored_name,
+        "original_name": file.filename,
+        "file_path": str(dest_path.resolve()),
+        "mime_type": file.content_type or "application/octet-stream",
+        "size_bytes": size_bytes,
+    }
+
+
+def delete_policy_document(file_path: str) -> None:
+    """Delete a policy document from the filesystem."""
+    path = Path(file_path)
+    if path.exists():
+        path.unlink()
+        logger.info("Deleted policy document %s", file_path)
+    else:
+        logger.warning("Policy document not found for deletion: %s", file_path)
+
+
+def read_policy_document(file_path: str) -> str:
+    """Read text content from a policy document."""
+    path = Path(file_path)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        logger.error("Failed to read policy document %s: %s", file_path, e)
+        return ""

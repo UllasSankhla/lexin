@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     storage_base_path: str = "./storage"
     context_files_path: str = "./storage/context_files"
     system_prompts_path: str = "./storage/system_prompts"
+    policy_documents_path: str = "./storage/policy_documents"
     max_context_file_size_mb: int = 10
 
     control_plane_api_key: str = "change-me-in-production"
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",")]
 
     def ensure_directories(self):
-        for path in [self.context_files_path, self.system_prompts_path]:
+        for path in [self.context_files_path, self.system_prompts_path, self.policy_documents_path]:
             Path(path).mkdir(parents=True, exist_ok=True)
         Path("./data").mkdir(parents=True, exist_ok=True)
 

@@ -195,7 +195,10 @@ class NarrativeCollectionAgent(AgentBase):
         """Summarise the narrative and return COMPLETED."""
         full_narrative = " ".join(segments)
         practice_areas = config.get("practice_areas", [])
-        areas_str = ", ".join(practice_areas) if practice_areas else "general legal matters"
+        areas_str = (
+            ", ".join(a["name"] if isinstance(a, dict) else a for a in practice_areas)
+            if practice_areas else "general legal matters"
+        )
 
         summary = "Unable to summarise."
         case_type = "unknown"
