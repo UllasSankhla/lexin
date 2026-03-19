@@ -7,17 +7,21 @@ from app.agents.workflow import (
 APPOINTMENT_BOOKING = WorkflowDefinition(
 
     id="appointment_booking",
-    description="Collect caller information and schedule an appointment",
+    description="Collect caller information, understand their matter, qualify it, and schedule an appointment",
 
     goal=GoalSpec(
-        primary_agents=["data_collection", "scheduling"],
+        primary_agents=["data_collection", "narrative_collection", "intake_qualification", "scheduling"],
         description=(
-            "You must complete two primary goals in order:\n"
-            "1. data_collection — collect all required caller information\n"
-            "2. scheduling — present available appointment slots and confirm a booking\n"
+            "You must complete four primary goals in order:\n"
+            "1. data_collection       — collect all required caller information (name, contact details, etc.)\n"
+            "2. narrative_collection  — listen to the caller describe their legal matter in free-form speech\n"
+            "3. intake_qualification  — assess whether the matter falls within the firm's practice areas\n"
+            "4. scheduling            — present available appointment slots and confirm a booking\n"
             "Always work toward the next incomplete primary goal. "
             "Interrupt agents (faq, context_docs, fallback) exist only to answer "
-            "side questions; the invoker will return to the primary goal automatically."
+            "side questions; the invoker will return to the primary goal automatically.\n"
+            "Note: intake_qualification runs automatically after narrative_collection completes "
+            "and does not require a caller utterance."
         ),
     ),
 
@@ -27,12 +31,15 @@ You are the routing decider for a voice appointment booking assistant.
 
 RULES:
 1. If the caller is answering a question or providing information, route to the
-   active or next primary goal agent (data_collection or scheduling).
-2. If the caller is asking a question (not providing information), route to an
+   active or next primary goal agent (data_collection, narrative_collection, or scheduling).
+2. narrative_collection accepts free-form speech — route to it whenever the caller
+   is describing their legal matter (not asking a question).
+3. If the caller is asking a question (not providing information), route to an
    interrupt-eligible agent (faq, context_docs, or fallback).
-3. After any interrupt-eligible agent, the invoker handles returning to the
+4. After any interrupt-eligible agent, the invoker handles returning to the
    primary goal — you do not need to re-select it.
-4. Only select agents listed under AVAILABLE AGENTS.
+5. intake_qualification is auto-run — never select it directly.
+6. Only select agents listed under AVAILABLE AGENTS.
 
 Respond ONLY with valid JSON:
 {"agent_id": "<id>", "interrupt": <true|false>, "reasoning": "<one line>"}
@@ -83,22 +90,54 @@ Respond ONLY with valid JSON:
             goal_order=1,
             interrupt_eligible=False,
             depends_on=[],
-            on_complete=Edge("scheduling"),
+            on_complete=Edge("narrative_collection"),
             on_failed=Edge("end", "data_collection_failed"),
             on_continue=Edge("decider"),
+        ),
+
+        ActivityNode(
+            id="narrative_collection",
+            agent_class="NarrativeCollectionAgent",
+            description=(
+                "PRIMARY GOAL 2: Listen to the caller describe their legal matter "
+                "in free-form speech across multiple turns."
+            ),
+            is_primary_goal=True,
+            goal_order=2,
+            interrupt_eligible=False,
+            depends_on=["data_collection"],
+            on_complete=Edge("intake_qualification"),
+            on_failed=Edge("end", "narrative_collection_failed"),
+            on_continue=Edge("decider"),
+        ),
+
+        ActivityNode(
+            id="intake_qualification",
+            agent_class="IntakeQualificationAgent",
+            description=(
+                "PRIMARY GOAL 3: Assess whether the caller's matter falls within "
+                "the firm's practice areas (runs immediately after narrative completes)."
+            ),
+            is_primary_goal=True,
+            goal_order=3,
+            interrupt_eligible=False,
+            depends_on=["narrative_collection"],
+            on_complete=Edge("scheduling"),
+            on_failed=Edge("end", "not_qualified"),
+            on_continue=Edge("end", "qualification_error"),
         ),
 
         ActivityNode(
             id="scheduling",
             agent_class="SchedulingAgent",
             description=(
-                "PRIMARY GOAL 2: Present available appointment slots, "
+                "PRIMARY GOAL 4: Present available appointment slots, "
                 "take the caller's choice, confirm and book."
             ),
             is_primary_goal=True,
-            goal_order=2,
+            goal_order=4,
             interrupt_eligible=False,
-            depends_on=["data_collection"],
+            depends_on=["intake_qualification"],
             on_complete=Edge("end", "completed"),
             on_failed=Edge("end", "scheduling_failed"),
             on_continue=Edge("decider"),

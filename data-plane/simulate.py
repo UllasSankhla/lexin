@@ -7,11 +7,17 @@ Usage:
     PYTHONPATH=. python3 simulate.py
 
 Scenarios:
-    1. Happy path — name, email, skip optional field, scheduling, booking
-    2. FAQ interrupt mid-collection → resume → collection continues
-    3. Fallback chain — faq fails → context_docs fails → fallback
-    4. 3 consecutive agent errors → finalize("agent_error")
-    5. WAITING_CONFIRM enforcement — bad decider overridden by hard check
+    1.  Happy path — name, email, skip optional, narrative, qualified → scheduling → book
+    2.  FAQ interrupt mid-collection → resume → collection continues → narrative → schedule
+    3.  Fallback chain — faq fails → context_docs fails → fallback → resume
+    4.  3 consecutive agent errors → finalize("agent_error")
+    5.  WAITING_CONFIRM enforcement — bad decider overridden by hard check
+    6.  Multiple FAQs during collection
+    7.  FAQs during scheduling
+    8.  Narrative happy path — multi-turn narrative collection
+    9.  FAQ interrupt mid-narrative → resume → narrative continues
+    10. Not-qualified path → end("not_qualified")
+    11. Ambiguous path → qualified → scheduling → book
 """
 from __future__ import annotations
 
@@ -135,7 +141,7 @@ class WorkflowSimulator:
             chain_depth: int = 0,
         ) -> tuple[str, str | None]:
             nonlocal booking
-            MAX_CHAIN = 5
+            MAX_CHAIN = 8  # allow longer chains for 4-goal sequence
 
             chain_log.append(agent_id)
             agent = self._agents[agent_id]
@@ -306,54 +312,79 @@ def _print_result(name: str, result: SimResult, expected_reason: str | None = No
         print(f"          speak : {t.speak!r:.70}")
     print(f"\n  final graph states:")
     for nid, status in result.final_states.items():
-        print(f"    {nid:20s} {status}")
+        print(f"    {nid:25s} {status}")
     if not ok:
         print(f"\n  ASSERTION FAILED: expected {expected_reason!r}, got {result.finalization_reason!r}")
     return ok
 
 
+# ── Mock builder helpers ──────────────────────────────────────────────────────
+
+def _nc_passthrough() -> ScriptedAgent:
+    """NarrativeCollection: instantly completes on first call (for scenarios testing other things)."""
+    return ScriptedAgent("narrative_collection", [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Thank you, I've noted your matter.",
+            collected={
+                "narrative_summary": "Caller described their legal matter.",
+                "case_type": "personal injury",
+                "full_narrative": "Caller described their legal matter.",
+            },
+        ),
+    ])
+
+
+def _iq_passthrough(decision: str = "qualified") -> ScriptedAgent:
+    """IntakeQualification: instantly returns given decision."""
+    status = AgentStatus.COMPLETED if decision != "not_qualified" else AgentStatus.FAILED
+    return ScriptedAgent("intake_qualification", [
+        SubagentResponse(
+            status=status,
+            speak="This looks like something we can help with." if decision != "not_qualified"
+                  else "Unfortunately, that falls outside our practice areas.",
+            collected={"qualification_decision": decision, "qualification_reason": "Matches."},
+        ),
+    ])
+
+
+def _webhook_ok() -> ScriptedAgent:
+    return ScriptedAgent("webhook", [
+        SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
+    ])
+
+
 # ── Scenario builders ─────────────────────────────────────────────────────────
-
-def _dc(*args) -> SubagentResponse:
-    """Shorthand: SubagentResponse for data_collection."""
-    return SubagentResponse(*args)
-
 
 def scenario_happy_path() -> SimResult:
     """
-    Full happy path:
-      name → WAITING_CONFIRM → confirm → email → WAITING_CONFIRM → confirm →
-      skip optional member ID (COMPLETED) → chain to scheduling →
-      pick slot → WAITING_CONFIRM → confirm → booked → end("completed")
+    Full happy path (4-goal sequence):
+      data_collection → (chains) narrative_collection (instant) →
+      (chains) intake_qualification (qualified) → (chains) scheduling → book
     """
     dc = [
-        # call 1: opening "" → ask first field
         SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="What's your full name?"),
-        # call 2: "John Smith" → spell back, wait for confirm
         SubagentResponse(
             status=AgentStatus.WAITING_CONFIRM,
             speak="I have your name as John Smith. Is that correct?",
             internal_state={"stage": "waiting_confirm", "current_field": "name", "pending_value": "John Smith"},
         ),
-        # call 3: "yes" (WAITING_CONFIRM enforced) → collect name, ask email
         SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak="Got it. What's your email address?",
             collected={"name": "John Smith"},
         ),
-        # call 4: "john@example.com" → spell back
         SubagentResponse(
             status=AgentStatus.WAITING_CONFIRM,
             speak="I have john@example.com. Is that correct?",
             internal_state={"stage": "waiting_confirm", "current_field": "email", "pending_value": "john@example.com"},
         ),
-        # call 5: "yes" (WAITING_CONFIRM enforced) → collect email, ask optional
         SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak="Great. Do you have a member ID? You can skip this if not.",
             collected={"email": "john@example.com"},
         ),
-        # call 6: "I don't have one" → skip optional, all fields done → COMPLETED
+        # "I don't have one" → COMPLETED → chains NC → IQ → scheduling
         SubagentResponse(
             status=AgentStatus.COMPLETED,
             speak="No problem, I'll note no member ID.",
@@ -361,18 +392,15 @@ def scenario_happy_path() -> SimResult:
     ]
 
     sched = [
-        # call 1: chained from data_collection.on_complete ("")
         SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak="I have these slots: 1) Monday 2pm, 2) Tuesday 3pm. Which works?",
         ),
-        # call 2: "the second one"
         SubagentResponse(
             status=AgentStatus.WAITING_CONFIRM,
             speak="Tuesday at 3pm. Shall I confirm that booking?",
             internal_state={"pending_slot": "Tuesday 3pm"},
         ),
-        # call 3: "yes" (WAITING_CONFIRM enforced)
         SubagentResponse(
             status=AgentStatus.COMPLETED,
             speak="You're all set for Tuesday at 3pm!",
@@ -381,25 +409,25 @@ def scenario_happy_path() -> SimResult:
     ]
 
     mocks = {
-        "data_collection": ScriptedAgent("data_collection", dc),
-        "scheduling":      ScriptedAgent("scheduling", sched),
-        "faq":             ScriptedAgent("faq", []),
-        "context_docs":    ScriptedAgent("context_docs", []),
-        "fallback":        ScriptedAgent("fallback", []),
-        "webhook":         ScriptedAgent("webhook", [
-            SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
-        ]),
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": _nc_passthrough(),
+        "intake_qualification": _iq_passthrough("qualified"),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "faq":                  ScriptedAgent("faq", []),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "webhook":              _webhook_ok(),
     }
 
-    # force_agent is overridden by WAITING_CONFIRM enforcement on "yes" turns
     script = [
         SimUtterance("John Smith",         force_agent="data_collection"),
         SimUtterance("yes",                force_agent="data_collection"),  # WC enforced
         SimUtterance("john@example.com",   force_agent="data_collection"),
         SimUtterance("yes",                force_agent="data_collection"),  # WC enforced
-        SimUtterance("I don't have one",   force_agent="data_collection"),  # → chains to scheduling
+        # "I don't have one" → DC COMPLETED → chains NC(instant) → IQ(qualified) → sched("") T1
+        SimUtterance("I don't have one",   force_agent="data_collection"),
         SimUtterance("the second one",     force_agent="scheduling"),
-        SimUtterance("yes",                force_agent="scheduling"),        # WC enforced
+        SimUtterance("yes",                force_agent="scheduling"),       # WC enforced
     ]
 
     return WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
@@ -407,9 +435,8 @@ def scenario_happy_path() -> SimResult:
 
 def scenario_faq_interrupt() -> SimResult:
     """
-    name collected → caller asks FAQ question (force_interrupt) →
-    faq answers → on_complete=Edge("resume") → data_collection re-invoked with "" →
-    collection continues → schedules → books.
+    name collected → FAQ interrupt → resume → collection continues →
+    narrative (instant) → qualified → scheduling → book.
     """
     dc = [
         SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="What's your full name?"),
@@ -418,7 +445,6 @@ def scenario_faq_interrupt() -> SimResult:
             speak="I have John Smith. Is that correct?",
             internal_state={"stage": "waiting_confirm", "current_field": "name", "pending_value": "John Smith"},
         ),
-        # "yes" → collect name, ask email
         SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak="Got it. What's your email address?",
@@ -461,24 +487,24 @@ def scenario_faq_interrupt() -> SimResult:
     ]
 
     mocks = {
-        "data_collection": ScriptedAgent("data_collection", dc),
-        "faq":             ScriptedAgent("faq", faq),
-        "context_docs":    ScriptedAgent("context_docs", []),
-        "fallback":        ScriptedAgent("fallback", []),
-        "scheduling":      ScriptedAgent("scheduling", sched),
-        "webhook":         ScriptedAgent("webhook", [
-            SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
-        ]),
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": _nc_passthrough(),
+        "intake_qualification": _iq_passthrough("qualified"),
+        "faq":                  ScriptedAgent("faq", faq),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
     }
 
     script = [
         SimUtterance("John Smith",            force_agent="data_collection"),
         SimUtterance("yes",                   force_agent="data_collection"),    # WC enforced
         SimUtterance("What are your hours?",  force_agent="faq", force_interrupt=True),
-        # faq.on_complete = Edge("resume") → data_collection("") re-invoked within same turn
         SimUtterance("john@example.com",      force_agent="data_collection"),
         SimUtterance("yes",                   force_agent="data_collection"),    # WC enforced
-        SimUtterance("I don't have one",      force_agent="data_collection"),    # → chains to sched
+        # DC COMPLETED → chains NC(instant) → IQ(qualified) → sched T1
+        SimUtterance("I don't have one",      force_agent="data_collection"),
         SimUtterance("slot 1",                force_agent="scheduling"),
         SimUtterance("yes",                   force_agent="scheduling"),         # WC enforced
     ]
@@ -488,13 +514,11 @@ def scenario_faq_interrupt() -> SimResult:
 
 def scenario_fallback_chain() -> SimResult:
     """
-    Caller asks something not in FAQ, not in docs → faq.on_failed→context_docs →
-    context_docs.on_failed→fallback → fallback.on_complete→resume →
-    data_collection continues.
+    faq fails → context_docs fails → fallback → resume → data_collection continues →
+    narrative (instant) → qualified → scheduling → book.
     """
     dc = [
         SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="What's your full name?"),
-        # resume invocation after fallback chain
         SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Back to your info — what's your name?"),
         SubagentResponse(
             status=AgentStatus.WAITING_CONFIRM, speak="I have Jane Doe. Correct?",
@@ -503,22 +527,6 @@ def scenario_fallback_chain() -> SimResult:
         SubagentResponse(
             status=AgentStatus.COMPLETED, speak="All information collected.",
             collected={"name": "Jane Doe"},
-        ),
-    ]
-
-    faq = [
-        SubagentResponse(status=AgentStatus.FAILED, speak=""),          # no match
-    ]
-
-    cdocs = [
-        SubagentResponse(status=AgentStatus.FAILED, speak=""),          # no relevant docs
-    ]
-
-    fallback = [
-        SubagentResponse(
-            status=AgentStatus.COMPLETED,
-            speak="I don't have that info right now. Someone will follow up.",
-            notes="Unanswered: parking options",
         ),
     ]
 
@@ -535,22 +543,28 @@ def scenario_fallback_chain() -> SimResult:
     ]
 
     mocks = {
-        "data_collection": ScriptedAgent("data_collection", dc),
-        "faq":             ScriptedAgent("faq", faq),
-        "context_docs":    ScriptedAgent("context_docs", cdocs),
-        "fallback":        ScriptedAgent("fallback", fallback),
-        "scheduling":      ScriptedAgent("scheduling", sched),
-        "webhook":         ScriptedAgent("webhook", [
-            SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": _nc_passthrough(),
+        "intake_qualification": _iq_passthrough("qualified"),
+        "faq":                  ScriptedAgent("faq", [SubagentResponse(status=AgentStatus.FAILED, speak="")]),
+        "context_docs":         ScriptedAgent("context_docs", [SubagentResponse(status=AgentStatus.FAILED, speak="")]),
+        "fallback":             ScriptedAgent("fallback", [
+            SubagentResponse(
+                status=AgentStatus.COMPLETED,
+                speak="I don't have that info right now. Someone will follow up.",
+                notes="Unanswered: parking options",
+            ),
         ]),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
     }
 
     script = [
-        # faq interrupt → faq FAILED → chains to context_docs → FAILED → fallback → COMPLETED → resume
         SimUtterance("What are your parking options?", force_agent="faq", force_interrupt=True),
         SimUtterance("Jane Doe",   force_agent="data_collection"),
         SimUtterance("yes",        force_agent="data_collection"),    # WC enforced
-        SimUtterance("skip",       force_agent="data_collection"),    # → COMPLETED → chains to sched
+        # DC COMPLETED → chains NC → IQ → sched T1
+        SimUtterance("skip",       force_agent="data_collection"),
         SimUtterance("slot 1",     force_agent="scheduling"),
         SimUtterance("yes",        force_agent="scheduling"),         # WC enforced
     ]
@@ -561,10 +575,11 @@ def scenario_fallback_chain() -> SimResult:
 def scenario_consecutive_errors() -> SimResult:
     """
     Every agent invocation raises. After 3 consecutive errors → finalize("agent_error").
-    Opening turn counts as error #1; script provides 2 more.
     """
-    mocks = {k: ErrorAgent() for k in
-             ("data_collection", "scheduling", "faq", "context_docs", "fallback", "webhook")}
+    mocks = {k: ErrorAgent() for k in (
+        "data_collection", "narrative_collection", "intake_qualification",
+        "scheduling", "faq", "context_docs", "fallback", "webhook",
+    )}
 
     script = [
         SimUtterance("anything", force_agent="data_collection"),   # error #2
@@ -577,10 +592,9 @@ def scenario_consecutive_errors() -> SimResult:
 
 def scenario_waiting_confirm_enforcement() -> SimResult:
     """
-    A bad decider always returns 'faq'.
+    Bad decider always returns 'faq'.
     T01 "John Smith" → forced to data_collection → WAITING_CONFIRM.
-    T02 "yes" → bad decider says 'faq' → WAITING_CONFIRM hard check overrides → data_collection.
-    Verifies T02 routes to data_collection, not faq.
+    T02 "yes" → bad decider says 'faq' → WAITING_CONFIRM enforced → data_collection.
     """
     dc = [
         SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="What's your full name?"),
@@ -589,7 +603,7 @@ def scenario_waiting_confirm_enforcement() -> SimResult:
             speak="I have John Smith. Is that correct?",
             internal_state={"stage": "waiting_confirm", "current_field": "name", "pending_value": "John Smith"},
         ),
-        # confirmation "yes" → COMPLETED → chains to scheduling
+        # confirmation → COMPLETED → chains NC → IQ → sched
         SubagentResponse(
             status=AgentStatus.COMPLETED,
             speak="All info collected.",
@@ -598,7 +612,6 @@ def scenario_waiting_confirm_enforcement() -> SimResult:
     ]
 
     faq = [
-        # Should NOT be consumed during the "yes" confirmation turn
         SubagentResponse(
             status=AgentStatus.COMPLETED,
             speak="[WRONG: faq should not run during WAITING_CONFIRM]",
@@ -618,29 +631,28 @@ def scenario_waiting_confirm_enforcement() -> SimResult:
     ]
 
     mocks = {
-        "data_collection": ScriptedAgent("data_collection", dc),
-        "faq":             ScriptedAgent("faq", faq),
-        "context_docs":    ScriptedAgent("context_docs", []),
-        "fallback":        ScriptedAgent("fallback", []),
-        "scheduling":      ScriptedAgent("scheduling", sched),
-        "webhook":         ScriptedAgent("webhook", [
-            SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
-        ]),
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": _nc_passthrough(),
+        "intake_qualification": _iq_passthrough("qualified"),
+        "faq":                  ScriptedAgent("faq", faq),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
     }
 
     def bad_decider(utterance: str, graph: WorkflowGraph) -> tuple[str, bool]:
         return "faq", False
 
     script = [
-        SimUtterance("John Smith", force_agent="data_collection"),  # triggers WAITING_CONFIRM
-        SimUtterance("yes"),            # bad decider says "faq" — WAITING_CONFIRM must override
+        SimUtterance("John Smith", force_agent="data_collection"),  # → WAITING_CONFIRM
+        SimUtterance("yes"),            # bad decider says "faq" — WC must override
         SimUtterance("slot 1", force_agent="scheduling"),
         SimUtterance("yes", force_agent="scheduling"),               # WC enforced
     ]
 
     result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks, decider_mock=bad_decider).run(script)
 
-    # Additional assertion: verify faq was never invoked
     faq_mock = mocks["faq"]
     if faq_mock._call_count > 0:  # type: ignore[attr-defined]
         print(f"\n  ⚠ WARNING: faq was called {faq_mock._call_count} time(s) — enforcement failed!")
@@ -653,76 +665,38 @@ def scenario_waiting_confirm_enforcement() -> SimResult:
 def scenario_multiple_faqs_during_collection() -> SimResult:
     """
     Caller asks 3 separate FAQ questions interspersed with data collection.
-    Verifies:
-    - faq / fallback can be invoked multiple times (not stuck in COMPLETED/FAILED)
-    - invocation_count increments correctly
-    - resume stack restores data_collection each time
-    - collection completes and booking succeeds despite interruptions
-
-    Flow:
-      ask name → FAQ #1 (hours) → resume → name → confirm →
-      FAQ #2 (fees) → resume → ask email → email → confirm →
-      FAQ #3 (address, no FAQ match → fallback) → resume →
-      all fields done → scheduling → book
     """
-    # data_collection calls in order
     dc = [
-        # call 1: opening
         SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="What's your full name?"),
-        # call 2: resume after FAQ #1 — re-ask name
-        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Back to your info — what's your name?"),
-        # call 3: "John Smith"
+        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Back — what's your name?"),
         SubagentResponse(
-            status=AgentStatus.WAITING_CONFIRM,
-            speak="I have John Smith. Correct?",
+            status=AgentStatus.WAITING_CONFIRM, speak="I have John Smith. Correct?",
             internal_state={"stage": "waiting_confirm", "current_field": "name", "pending_value": "John Smith"},
         ),
-        # call 4: "yes" (WC enforced) → collect name, ask email
         SubagentResponse(
-            status=AgentStatus.IN_PROGRESS,
-            speak="Great. What's your email address?",
+            status=AgentStatus.IN_PROGRESS, speak="Great. What's your email address?",
             collected={"name": "John Smith"},
         ),
-        # call 5: resume after FAQ #2 — re-ask email
+        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Back — what's your email?"),
         SubagentResponse(
-            status=AgentStatus.IN_PROGRESS,
-            speak="Back to it — what's your email address?",
-        ),
-        # call 6: "john@example.com"
-        SubagentResponse(
-            status=AgentStatus.WAITING_CONFIRM,
-            speak="I have john@example.com. Correct?",
+            status=AgentStatus.WAITING_CONFIRM, speak="I have john@example.com. Correct?",
             internal_state={"stage": "waiting_confirm", "current_field": "email", "pending_value": "john@example.com"},
         ),
-        # call 7: "yes" (WC enforced) → collect email, ask member ID
         SubagentResponse(
-            status=AgentStatus.IN_PROGRESS,
-            speak="Got it. Do you have a member ID?",
+            status=AgentStatus.IN_PROGRESS, speak="Got it. Do you have a member ID?",
             collected={"email": "john@example.com"},
         ),
-        # call 8: resume after FAQ #3 (fallback) — re-ask member ID
-        SubagentResponse(
-            status=AgentStatus.IN_PROGRESS,
-            speak="Sorry about that. Do you have a member ID?",
-        ),
-        # call 9: "I don't have one" → skip optional → COMPLETED
-        SubagentResponse(
-            status=AgentStatus.COMPLETED,
-            speak="No problem. All information collected.",
-        ),
+        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Sorry about that. Do you have a member ID?"),
+        SubagentResponse(status=AgentStatus.COMPLETED, speak="All information collected."),
     ]
 
-    # faq called twice (hours, fees); fails on third call (address)
     faq = [
         SubagentResponse(status=AgentStatus.COMPLETED, speak="Our hours are 9am–5pm Mon–Fri."),
-        SubagentResponse(status=AgentStatus.COMPLETED, speak="Consultations start at $250 per hour."),
-        SubagentResponse(status=AgentStatus.FAILED, speak=""),  # address not in FAQ
-    ]
-
-    # context_docs also doesn't have address info
-    cdocs = [
+        SubagentResponse(status=AgentStatus.COMPLETED, speak="Consultations start at $250/hr."),
         SubagentResponse(status=AgentStatus.FAILED, speak=""),
     ]
+
+    cdocs = [SubagentResponse(status=AgentStatus.FAILED, speak="")]
 
     fallback = [
         SubagentResponse(
@@ -745,35 +719,31 @@ def scenario_multiple_faqs_during_collection() -> SimResult:
     ]
 
     mocks = {
-        "data_collection": ScriptedAgent("data_collection", dc),
-        "faq":             ScriptedAgent("faq", faq),
-        "context_docs":    ScriptedAgent("context_docs", cdocs),
-        "fallback":        ScriptedAgent("fallback", fallback),
-        "scheduling":      ScriptedAgent("scheduling", sched),
-        "webhook":         ScriptedAgent("webhook", [
-            SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
-        ]),
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": _nc_passthrough(),
+        "intake_qualification": _iq_passthrough("qualified"),
+        "faq":                  ScriptedAgent("faq", faq),
+        "context_docs":         ScriptedAgent("context_docs", cdocs),
+        "fallback":             ScriptedAgent("fallback", fallback),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
     }
 
     script = [
-        # FAQ #1 — before name is collected
         SimUtterance("What are your hours?",   force_agent="faq", force_interrupt=True),
         SimUtterance("John Smith",             force_agent="data_collection"),
-        SimUtterance("yes",                    force_agent="data_collection"),   # WC enforced
-        # FAQ #2 — after name, before email
+        SimUtterance("yes",                    force_agent="data_collection"),
         SimUtterance("What are your fees?",    force_agent="faq", force_interrupt=True),
         SimUtterance("john@example.com",       force_agent="data_collection"),
-        SimUtterance("yes",                    force_agent="data_collection"),   # WC enforced
-        # FAQ #3 — after email, before optional field — faq fails → context_docs → fallback
+        SimUtterance("yes",                    force_agent="data_collection"),
         SimUtterance("What is your address?",  force_agent="faq", force_interrupt=True),
-        SimUtterance("I don't have one",       force_agent="data_collection"),   # → COMPLETED → sched
+        SimUtterance("I don't have one",       force_agent="data_collection"),
         SimUtterance("slot 2",                 force_agent="scheduling"),
-        SimUtterance("yes",                    force_agent="scheduling"),         # WC enforced
+        SimUtterance("yes",                    force_agent="scheduling"),
     ]
 
     result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
 
-    # Additional checks
     faq_mock = mocks["faq"]
     fallback_mock = mocks["fallback"]
     print(f"\n  faq invoked {faq_mock._call_count}x  "  # type: ignore[attr-defined]
@@ -784,97 +754,63 @@ def scenario_multiple_faqs_during_collection() -> SimResult:
 
 def scenario_faq_during_scheduling() -> SimResult:
     """
-    Caller asks two FAQ questions while scheduling is in progress.
-    Verifies:
-    - scheduling is correctly pushed/popped from resume stack twice
-    - scheduling.on_continue=Edge("decider") means scheduling re-invoked with "" on resume
-    - each resume re-presents the pending question
-    - booking succeeds at the end
-
-    Flow:
-      data done (pre-populated) → scheduling asks slots →
-      FAQ #1 (payment) → resume → scheduling re-presents slots →
-      caller picks slot → scheduling WAITING_CONFIRM →
-      FAQ #2 (cancellation) → resume → scheduling re-confirms slot →
-      "yes" (WC enforced) → scheduling COMPLETED → end
+    Two FAQs during scheduling. Narrative passes through instantly.
     """
-    # data_collection goes straight to COMPLETED (pre-populated scenario)
     dc = [
         SubagentResponse(
-            status=AgentStatus.COMPLETED,
-            speak="",
+            status=AgentStatus.COMPLETED, speak="",
             collected={"name": "Jane Doe", "email": "jane@example.com"},
         ),
     ]
 
     sched = [
-        # call 1: chained from data_collection.on_complete
         SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
-            speak="I have these slots: 1) Tuesday 10am, 2) Thursday 2pm. Which works?",
+            speak="Slots: 1) Tuesday 10am, 2) Thursday 2pm. Which works?",
         ),
-        # call 2: resume after FAQ #1 — re-presents slots
         SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak="Back to scheduling — slots: 1) Tuesday 10am, 2) Thursday 2pm.",
         ),
-        # call 3: "slot 2 please"
         SubagentResponse(
-            status=AgentStatus.WAITING_CONFIRM,
-            speak="Thursday at 2pm. Shall I confirm?",
+            status=AgentStatus.WAITING_CONFIRM, speak="Thursday at 2pm. Shall I confirm?",
             internal_state={"pending_slot": "Thursday 2pm"},
         ),
-        # call 4: resume after FAQ #2 — re-presents confirmation
         SubagentResponse(
             status=AgentStatus.WAITING_CONFIRM,
             speak="Just to confirm — Thursday at 2pm. Is that right?",
             internal_state={"pending_slot": "Thursday 2pm"},
         ),
-        # call 5: "yes" (WC enforced)
         SubagentResponse(
-            status=AgentStatus.COMPLETED,
-            speak="Booked! See you Thursday at 2pm.",
+            status=AgentStatus.COMPLETED, speak="Booked! See you Thursday at 2pm.",
             booking={"booking_id": "MOCK-007", "slot_description": "Thursday 2pm", "status": "confirmed"},
         ),
     ]
 
     faq = [
-        SubagentResponse(
-            status=AgentStatus.COMPLETED,
-            speak="We accept credit card, check, and ACH transfer.",
-        ),
-        SubagentResponse(
-            status=AgentStatus.COMPLETED,
-            speak="You can cancel up to 24 hours before your appointment at no charge.",
-        ),
+        SubagentResponse(status=AgentStatus.COMPLETED, speak="We accept credit card and ACH."),
+        SubagentResponse(status=AgentStatus.COMPLETED, speak="Cancel 24h before at no charge."),
     ]
 
     mocks = {
-        "data_collection": ScriptedAgent("data_collection", dc),
-        "faq":             ScriptedAgent("faq", faq),
-        "context_docs":    ScriptedAgent("context_docs", []),
-        "fallback":        ScriptedAgent("fallback", []),
-        "scheduling":      ScriptedAgent("scheduling", sched),
-        "webhook":         ScriptedAgent("webhook", [
-            SubagentResponse(status=AgentStatus.COMPLETED, speak=""),
-        ]),
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": _nc_passthrough(),
+        "intake_qualification": _iq_passthrough("qualified"),
+        "faq":                  ScriptedAgent("faq", faq),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
     }
 
     script = [
-        # opening turn chains dc.on_complete → scheduling (no utterance needed for dc)
-        # FAQ #1 during slot selection
+        # DC COMPLETED → chains NC → IQ → sched T1 (on opening turn chain)
         SimUtterance("What payment methods do you accept?",
                      force_agent="faq", force_interrupt=True),
-        # resume → scheduling re-presents slots
-        SimUtterance("slot 2 please",  force_agent="scheduling"),   # → WAITING_CONFIRM
-        # FAQ #2 during confirmation (while scheduling is WAITING_CONFIRM)
-        # Note: WAITING_CONFIRM is active here, so we need force_interrupt but
-        # the scheduler is not yet in WAITING_CONFIRM until after "slot 2 please" —
-        # the FAQ fires AFTER the WAITING_CONFIRM state is set
+        SimUtterance("slot 2 please",  force_agent="scheduling"),
         SimUtterance("What is your cancellation policy?",
                      force_agent="faq", force_interrupt=True),
-        # resume → scheduling re-presents confirmation (WAITING_CONFIRM again)
-        SimUtterance("yes",            force_agent="scheduling"),    # WC enforced → COMPLETED
+        SimUtterance("yes",            force_agent="scheduling"),
     ]
 
     result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
@@ -885,17 +821,408 @@ def scenario_faq_during_scheduling() -> SimResult:
     return result
 
 
+# ── Narrative & Intake scenarios ──────────────────────────────────────────────
+
+def scenario_narrative_happy_path() -> SimResult:
+    """
+    Multi-turn narrative collection:
+      NC opens → caller speaks 3 times → NC detects completion → asks "anything else?" →
+      caller says no → NC COMPLETED → IQ qualified → scheduling → book.
+    """
+    dc = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="All information collected.",
+            collected={"name": "Alice Brown", "email": "alice@example.com"},
+        ),
+    ]
+
+    nc = [
+        # call 1: opening ("") → ask for narrative
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Please describe your legal matter in your own words.",
+        ),
+        # call 2: first utterance → filler
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="I see, please go on.",
+            internal_state={"stage": "collecting", "segments": ["I was in a car accident last month."]},
+        ),
+        # call 3: second utterance → filler
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Understood, continue.",
+            internal_state={"stage": "collecting", "segments": [
+                "I was in a car accident last month.",
+                "The other driver ran a red light and hit my vehicle.",
+            ]},
+        ),
+        # call 4: third utterance → completion detected → ask "anything else?"
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Is there anything else you'd like to add?",
+            internal_state={"stage": "asking_done", "segments": [
+                "I was in a car accident last month.",
+                "The other driver ran a red light and hit my vehicle.",
+                "I sustained injuries and my car was totalled.",
+            ]},
+        ),
+        # call 5: "no that's all" → COMPLETED
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Thank you for sharing that. I've noted your matter.",
+            collected={
+                "narrative_summary": "Caller was in a car accident caused by another driver running a red light. Sustained injuries and vehicle was totalled.",
+                "case_type": "personal injury",
+                "full_narrative": "I was in a car accident last month. The other driver ran a red light and hit my vehicle. I sustained injuries and my car was totalled.",
+            },
+        ),
+    ]
+
+    iq = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="This looks like a personal injury matter — we can help.",
+            collected={"qualification_decision": "qualified", "qualification_reason": "Personal injury matches practice areas."},
+        ),
+    ]
+
+    sched = [
+        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Slots: 1) Monday 10am, 2) Wednesday 2pm."),
+        SubagentResponse(
+            status=AgentStatus.WAITING_CONFIRM, speak="Monday 10am. Confirm?",
+            internal_state={"pending_slot": "Monday 10am"},
+        ),
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="Booked! See you Monday at 10am.",
+            booking={"booking_id": "MOCK-008", "slot_description": "Monday 10am", "status": "confirmed"},
+        ),
+    ]
+
+    mocks = {
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": ScriptedAgent("narrative_collection", nc),
+        "intake_qualification": ScriptedAgent("intake_qualification", iq),
+        "faq":                  ScriptedAgent("faq", []),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
+    }
+
+    script = [
+        # DC COMPLETED on opening turn → chains NC("") T1 speak
+        # NC speaks "Please describe your legal matter..."
+        SimUtterance("I was in a car accident last month.",
+                     force_agent="narrative_collection"),
+        SimUtterance("The other driver ran a red light and hit my vehicle.",
+                     force_agent="narrative_collection"),
+        SimUtterance("I sustained injuries and my car was totalled.",
+                     force_agent="narrative_collection"),
+        # NC asks "Is there anything else?"
+        SimUtterance("No, that's all.",
+                     force_agent="narrative_collection"),
+        # NC COMPLETED → chains IQ("") → IQ COMPLETED → chains sched("") T1
+        SimUtterance("slot 1",   force_agent="scheduling"),
+        SimUtterance("yes",      force_agent="scheduling"),  # WC enforced
+    ]
+
+    return WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
+
+
+def scenario_faq_interrupt_mid_narrative() -> SimResult:
+    """
+    Caller starts narrative → asks FAQ question (interrupt) → faq answers →
+    resume → narrative_collection re-invoked with "" → narrative continues → completes.
+
+    Verifies: segments accumulated before interrupt are preserved after resume.
+    """
+    dc = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="",
+            collected={"name": "Bob Carter", "email": "bob@example.com"},
+        ),
+    ]
+
+    nc = [
+        # call 1: opening ("") → ask for narrative
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Please describe your legal matter.",
+        ),
+        # call 2: first segment → filler
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="I see, please go on.",
+            internal_state={"stage": "collecting", "segments": ["My landlord is refusing to fix the heating."]},
+        ),
+        # call 3: resume ("") after FAQ → re-prompt
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Please go ahead, I'm still listening about your matter.",
+            internal_state={"stage": "collecting", "segments": ["My landlord is refusing to fix the heating."]},
+        ),
+        # call 4: continued narrative → completion detected
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Is there anything else you'd like to add?",
+            internal_state={"stage": "asking_done", "segments": [
+                "My landlord is refusing to fix the heating.",
+                "It has been three months and the apartment is uninhabitable.",
+            ]},
+        ),
+        # call 5: "no" → COMPLETED with full concatenated narrative
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Thank you, I've noted your matter.",
+            collected={
+                "narrative_summary": "Tenant dispute — landlord failing to fix heating for 3 months.",
+                "case_type": "landlord tenant",
+                "full_narrative": "My landlord is refusing to fix the heating. It has been three months and the apartment is uninhabitable.",
+            },
+        ),
+    ]
+
+    faq = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Our initial consultation is free of charge.",
+        ),
+    ]
+
+    iq = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="This sounds like a landlord-tenant matter we can assist with.",
+            collected={"qualification_decision": "qualified", "qualification_reason": "Landlord tenant matches."},
+        ),
+    ]
+
+    sched = [
+        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Slots: 1) Tuesday, 2) Friday."),
+        SubagentResponse(
+            status=AgentStatus.WAITING_CONFIRM, speak="Tuesday. Confirm?",
+            internal_state={"pending_slot": "Tuesday"},
+        ),
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="Booked!",
+            booking={"booking_id": "MOCK-009", "slot_description": "Tuesday", "status": "confirmed"},
+        ),
+    ]
+
+    mocks = {
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": ScriptedAgent("narrative_collection", nc),
+        "intake_qualification": ScriptedAgent("intake_qualification", iq),
+        "faq":                  ScriptedAgent("faq", faq),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
+    }
+
+    script = [
+        # DC COMPLETED on opening turn → chains NC("") → NC asks for narrative
+        SimUtterance("My landlord is refusing to fix the heating.",
+                     force_agent="narrative_collection"),
+        # FAQ interrupt mid-narrative
+        SimUtterance("Is the initial consultation free?",
+                     force_agent="faq", force_interrupt=True),
+        # faq.on_complete=Edge("resume") → NC("") resume call
+        # NC re-prompts caller to continue
+        SimUtterance("It has been three months and the apartment is uninhabitable.",
+                     force_agent="narrative_collection"),
+        SimUtterance("No, that covers it.",
+                     force_agent="narrative_collection"),
+        # NC COMPLETED → chains IQ → IQ COMPLETED → chains sched
+        SimUtterance("slot 1",   force_agent="scheduling"),
+        SimUtterance("yes",      force_agent="scheduling"),   # WC enforced
+    ]
+
+    result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
+
+    nc_mock = mocks["narrative_collection"]
+    faq_mock = mocks["faq"]
+    print(f"\n  narrative_collection invoked {nc_mock._call_count}x  "  # type: ignore[attr-defined]
+          f"faq invoked {faq_mock._call_count}x")  # type: ignore[attr-defined]
+
+    return result
+
+
+def scenario_not_qualified() -> SimResult:
+    """
+    Caller's matter is outside firm's practice areas.
+    IQ returns FAILED → on_failed=Edge("end", "not_qualified").
+    """
+    dc = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="",
+            collected={"name": "Carol Evans", "email": "carol@example.com"},
+        ),
+    ]
+
+    nc = [
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Please describe your legal matter.",
+        ),
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Is there anything else you'd like to add?",
+            internal_state={"stage": "asking_done", "segments": [
+                "I've been charged with felony assault.",
+            ]},
+        ),
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Thank you, I've noted your matter.",
+            collected={
+                "narrative_summary": "Caller facing felony assault criminal charge.",
+                "case_type": "criminal defence",
+                "full_narrative": "I've been charged with felony assault.",
+            },
+        ),
+    ]
+
+    iq = [
+        # Criminal defence — outside this firm's practice areas (family/civil law firm)
+        SubagentResponse(
+            status=AgentStatus.FAILED,
+            speak=(
+                "I'm sorry to hear about your situation. Unfortunately, criminal defence "
+                "falls outside our current practice areas. We'd recommend reaching out to "
+                "a criminal defence attorney."
+            ),
+            collected={"qualification_decision": "not_qualified", "qualification_reason": "Criminal defence outside practice areas."},
+        ),
+    ]
+
+    mocks = {
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": ScriptedAgent("narrative_collection", nc),
+        "intake_qualification": ScriptedAgent("intake_qualification", iq),
+        "faq":                  ScriptedAgent("faq", []),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", []),   # should never be invoked
+        "webhook":              ScriptedAgent("webhook", []),
+    }
+
+    script = [
+        SimUtterance("I've been charged with felony assault.",
+                     force_agent="narrative_collection"),
+        SimUtterance("No, that's all.",
+                     force_agent="narrative_collection"),
+        # NC COMPLETED → chains IQ → IQ FAILED → on_failed=Edge("end", "not_qualified")
+    ]
+
+    result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
+
+    sched_mock = mocks["scheduling"]
+    if sched_mock._call_count > 0:  # type: ignore[attr-defined]
+        print(f"\n  ⚠ WARNING: scheduling was called {sched_mock._call_count}x — should be 0!")
+    else:
+        print(f"\n  ✓ CONFIRMED: scheduling not invoked (correctly terminated at not_qualified)")
+
+    return result
+
+
+def scenario_ambiguous_qualification() -> SimResult:
+    """
+    IQ returns ambiguous (COMPLETED) → proceeds to scheduling anyway.
+    Verifies ambiguous is treated as 'go ahead' — human will review.
+    """
+    dc = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="",
+            collected={"name": "Dan Fisher", "email": "dan@example.com"},
+        ),
+    ]
+
+    nc = [
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Please describe your legal matter.",
+        ),
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Is there anything else you'd like to add?",
+        ),
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Thank you, I've noted your matter.",
+            collected={
+                "narrative_summary": "Cross-border business dispute with unclear jurisdiction.",
+                "case_type": "unknown",
+                "full_narrative": "I have a business dispute with a company in another country.",
+            },
+        ),
+    ]
+
+    iq = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,   # ambiguous → still COMPLETED → proceeds to scheduling
+            speak="Your matter may be within our scope — a specialist will assess further during the consultation.",
+            collected={"qualification_decision": "ambiguous", "qualification_reason": "Cross-border jurisdiction unclear."},
+        ),
+    ]
+
+    sched = [
+        SubagentResponse(status=AgentStatus.IN_PROGRESS, speak="Slots: 1) Thursday, 2) Friday."),
+        SubagentResponse(
+            status=AgentStatus.WAITING_CONFIRM, speak="Thursday. Confirm?",
+            internal_state={"pending_slot": "Thursday"},
+        ),
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="Booked!",
+            booking={"booking_id": "MOCK-011", "slot_description": "Thursday", "status": "confirmed"},
+        ),
+    ]
+
+    mocks = {
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": ScriptedAgent("narrative_collection", nc),
+        "intake_qualification": ScriptedAgent("intake_qualification", iq),
+        "faq":                  ScriptedAgent("faq", []),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", sched),
+        "webhook":              _webhook_ok(),
+    }
+
+    script = [
+        SimUtterance("I have a business dispute with a company in another country.",
+                     force_agent="narrative_collection"),
+        SimUtterance("No, that's it.",
+                     force_agent="narrative_collection"),
+        # NC COMPLETED → IQ COMPLETED (ambiguous) → sched
+        SimUtterance("slot 1",   force_agent="scheduling"),
+        SimUtterance("yes",      force_agent="scheduling"),  # WC enforced
+    ]
+
+    result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
+
+    iq_decision = result.collected.get("qualification_decision", "?")
+    print(f"\n  iq decision={iq_decision!r}  (ambiguous should still reach scheduling)")
+
+    return result
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
     scenarios: list[tuple[str, object, str | None]] = [
-        ("1 — Happy path",                       scenario_happy_path,                   "completed"),
-        ("2 — FAQ interrupt + resume",            scenario_faq_interrupt,                "completed"),
-        ("3 — Fallback chain (faq→docs→fb)",      scenario_fallback_chain,               "completed"),
-        ("4 — 3 consecutive errors",              scenario_consecutive_errors,           "agent_error"),
-        ("5 — WAITING_CONFIRM enforcement",       scenario_waiting_confirm_enforcement,  "completed"),
-        ("6 — Multiple FAQs during collection",   scenario_multiple_faqs_during_collection, "completed"),
-        ("7 — FAQs during scheduling",            scenario_faq_during_scheduling,        "completed"),
+        ("1  — Happy path (4-goal)",                    scenario_happy_path,                   "completed"),
+        ("2  — FAQ interrupt mid-collection",           scenario_faq_interrupt,                "completed"),
+        ("3  — Fallback chain (faq→docs→fb)",           scenario_fallback_chain,               "completed"),
+        ("4  — 3 consecutive errors",                   scenario_consecutive_errors,           "agent_error"),
+        ("5  — WAITING_CONFIRM enforcement",            scenario_waiting_confirm_enforcement,  "completed"),
+        ("6  — Multiple FAQs during collection",        scenario_multiple_faqs_during_collection, "completed"),
+        ("7  — FAQs during scheduling",                 scenario_faq_during_scheduling,        "completed"),
+        ("8  — Narrative happy path (multi-turn)",      scenario_narrative_happy_path,         "completed"),
+        ("9  — FAQ interrupt mid-narrative + resume",   scenario_faq_interrupt_mid_narrative,  "completed"),
+        ("10 — Not-qualified path",                     scenario_not_qualified,                "not_qualified"),
+        ("11 — Ambiguous qualification → scheduling",   scenario_ambiguous_qualification,      "completed"),
     ]
 
     passed, failed = 0, 0
