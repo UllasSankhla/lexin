@@ -11,6 +11,13 @@ from app.services.calendar_service import list_available_slots, book_time_slot
 
 logger = logging.getLogger(__name__)
 
+_SPEAK_SLOTS_SYSTEM = (
+    "Present available appointment slots to a caller over the phone. "
+    "Friendly and concise. Plain text only — no markdown, no asterisks, no numbers, no special characters. "
+    "List the slots naturally as a comma-separated list. Under three sentences. "
+    "Ask which one they prefer."
+)
+
 _YES_RE = re.compile(
     r"\b(yes|yeah|yep|yup|correct|right|confirmed|confirm|sure|ok|okay|"
     r"perfect|great|sounds good|go ahead|absolutely|definitely)\b", re.IGNORECASE
@@ -66,6 +73,14 @@ class SchedulingAgent(AgentBase):
             speak="Your appointment has been confirmed. Have a great day!",
             internal_state=internal_state,
         )
+
+    def _speak_slots(self, slots_data: list) -> str:
+        """Build a spoken slot list from a list of slot dicts or TimeSlot objects."""
+        slot_list = ", ".join(
+            s.description if hasattr(s, "description") else s["description"]
+            for s in slots_data
+        )
+        return llm_text_call(_SPEAK_SLOTS_SYSTEM, f"Slots: {slot_list}")
 
     def _present_slots(self, utterance: str, internal_state: dict, config: dict) -> SubagentResponse:
         # Pull collected data from graph state via config passthrough
@@ -129,11 +144,7 @@ class SchedulingAgent(AgentBase):
                 internal_state=internal_state,
             )
 
-        numbered = "\n".join(f"{i+1}. {s.description}" for i, s in enumerate(slots))
-        speak = llm_text_call(
-            "Present available appointment slots to a caller over the phone. Friendly and concise. No markdown. Under three sentences.",
-            f"Slots:\n{numbered}\nAsk which one they prefer.",
-        )
+        speak = self._speak_slots(slots)
         return SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak=speak,
@@ -144,10 +155,12 @@ class SchedulingAgent(AgentBase):
         slots_data = internal_state.get("available_slots", [])
 
         if slots_data:
+            # Numbered list used internally only for LLM choice identification — never spoken to caller
             numbered = "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
             try:
                 result = llm_json_call(
-                    "Identify which slot number the caller chose. Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
+                    "Identify which slot the caller chose based on their description. "
+                    "Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
                     f"Available slots:\n{numbered}\nCaller said: \"{utterance}\"",
                 )
                 slot_num = result.get("slot")
@@ -204,11 +217,7 @@ class SchedulingAgent(AgentBase):
                         speak="I'm sorry, I don't see any openings in that time range. Would you like to try a different time?",
                         internal_state=internal_state,
                     )
-                numbered2 = "\n".join(f"{i+1}. {sl.description}" for i, sl in enumerate(new_slots))
-                speak = llm_text_call(
-                    "Present appointment slots to a caller. Friendly, concise, no markdown.",
-                    f"Slots:\n{numbered2}\nAsk which one they prefer.",
-                )
+                speak = self._speak_slots(new_slots)
                 return SubagentResponse(
                     status=AgentStatus.IN_PROGRESS,
                     speak=speak,
@@ -236,11 +245,7 @@ class SchedulingAgent(AgentBase):
             )
 
         if slots_data:
-            numbered = "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
-            speak = llm_text_call(
-                "Re-present appointment slots to a caller who didn't make a clear choice. Friendly.",
-                f"Slots:\n{numbered}",
-            )
+            speak = self._speak_slots(slots_data)
         else:
             speak = "I don't have any slots loaded. When would work best for you?"
         return SubagentResponse(
@@ -302,11 +307,7 @@ class SchedulingAgent(AgentBase):
             internal_state["stage"] = "awaiting_choice"
             internal_state["retry_count"] = 0
             if slots_data:
-                numbered = "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
-                speak = llm_text_call(
-                    "Re-present appointment slots after caller declined the chosen one.",
-                    f"Slots:\n{numbered}",
-                )
+                speak = self._speak_slots(slots_data)
             else:
                 speak = "No problem. When would work best for you?"
             return SubagentResponse(

@@ -250,7 +250,7 @@ class IntakeQualificationAgent(AgentBase):
                 status=AgentStatus.FAILED,
                 speak=speak,
                 internal_state=internal_state,
-                collected={
+                hidden_collected={
                     "qualification_decision": decision,
                     "qualification_reason": reason,
                     "matched_area": matched_area or "",
@@ -267,7 +267,7 @@ class IntakeQualificationAgent(AgentBase):
             status=AgentStatus.COMPLETED,
             speak=speak,
             internal_state=internal_state,
-            collected={
+            hidden_collected={
                 "qualification_decision": decision,
                 "qualification_reason": reason,
                 "matched_area": matched_area or "",

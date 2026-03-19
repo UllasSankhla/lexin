@@ -104,7 +104,7 @@ class NarrativeCollectionAgent(AgentBase):
         stage = internal_state.get("stage", "collecting")
         segments: list[str] = internal_state.get("segments", [])
 
-        # ── Resume invocation (empty utterance after FAQ interrupt) ─────────
+        # ── Resume invocation (empty utterance after FAQ interrupt or first call) ─
         if not utterance.strip():
             if stage == "asking_done":
                 return SubagentResponse(
@@ -112,11 +112,14 @@ class NarrativeCollectionAgent(AgentBase):
                     speak="Is there anything else you'd like to add?",
                     internal_state=internal_state,
                 )
-            # stage == "collecting"
-            resume_prompt = self._get_resume_prompt(config)
+            # stage == "collecting" — first call has no segments yet, later calls are resumes
+            if not segments:
+                prompt = self._get_opening_prompt(config)
+            else:
+                prompt = self._get_resume_prompt(config)
             return SubagentResponse(
                 status=AgentStatus.IN_PROGRESS,
-                speak=resume_prompt,
+                speak=prompt,
                 internal_state=internal_state,
             )
 
@@ -160,6 +163,14 @@ class NarrativeCollectionAgent(AgentBase):
         )
 
     # ── Private helpers ────────────────────────────────────────────────────
+
+    def _get_opening_prompt(self, config: dict) -> str:
+        topic = config.get("assistant", {}).get("narrative_topic", "your matter")
+        return (
+            f"I'd now like to understand {topic} in more detail. "
+            "Please take your time and share as much information as you can — "
+            "the more you tell us, the better our team can understand how to help you."
+        )
 
     def _get_resume_prompt(self, config: dict) -> str:
         topic = config.get("assistant", {}).get("narrative_topic", "your matter")
