@@ -362,6 +362,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         Knowledge Files
       </div>
+      <div class="nav-item" data-page="qualification" onclick="navigate('qualification')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></svg>
+        Lead Qualification
+      </div>
       <div class="nav-item" data-page="spellrules" onclick="navigate('spellrules')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
         Name Corrections
@@ -598,6 +602,26 @@
         <table>
           <thead><tr><th>File Name</th><th>Description</th><th>Size</th><th>Active</th><th></th></tr></thead>
           <tbody id="contextBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- LEAD QUALIFICATION -->
+  <section class="page" id="page-qualification">
+    <div class="page-header">
+      <h1>Lead Qualification</h1>
+      <p>Define practice areas with qualification criteria. The AI uses these rules to decide whether to route a caller to scheduling or decline politely.</p>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Practice Areas</span>
+        <button class="btn btn-primary btn-sm" onclick="openPracticeAreaModal()">+ Add Practice Area</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Qualification Criteria</th><th>Active</th><th></th></tr></thead>
+          <tbody id="practiceAreaBody"></tbody>
         </table>
       </div>
     </div>
@@ -889,6 +913,60 @@
   </div>
 </div>
 
+<!-- Practice Area Modal -->
+<div class="modal-overlay" id="practiceAreaModal">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <span class="modal-title" id="practiceAreaModalTitle">Add Practice Area</span>
+      <button class="modal-close" onclick="closeModal('practiceAreaModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="practiceAreaForm" onsubmit="savePracticeArea(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Name <span class="label-hint">e.g. personal injury</span></label>
+            <input type="text" id="paName" placeholder="e.g. personal injury" required>
+          </div>
+          <div class="form-group">
+            <label>Display Order <span class="label-hint">Lower = listed first</span></label>
+            <input type="number" id="paOrder" value="0" min="0">
+          </div>
+          <div class="form-group span2">
+            <label>Description <span class="label-hint">What this area covers — helps the AI understand scope</span></label>
+            <textarea id="paDescription" rows="2" placeholder="e.g. Accidents, slip and fall, medical malpractice, and motor vehicle collisions resulting in bodily harm."></textarea>
+          </div>
+          <div class="form-group span2">
+            <label>Qualification Criteria <span class="label-hint">Plain-English rules for when a caller QUALIFIES</span></label>
+            <textarea id="paQualCriteria" rows="3" placeholder="e.g. The caller must have suffered a physical injury caused by another party's negligence. The incident must have occurred within the past 3 years."></textarea>
+          </div>
+          <div class="form-group span2">
+            <label>Disqualification Signals <span class="label-hint">Signals that mean the caller does NOT qualify</span></label>
+            <textarea id="paDisqualSignals" rows="2" placeholder="e.g. Caller is the defendant. Incident occurred more than 3 years ago. Property damage only with no physical injury."></textarea>
+          </div>
+          <div class="form-group span2">
+            <label>Ambiguous Signals <span class="label-hint">Signals that need a human to confirm — books anyway with a note</span></label>
+            <textarea id="paAmbigSignals" rows="2" placeholder="e.g. Caller is unsure of injury severity. Incident date is unclear."></textarea>
+          </div>
+          <div class="form-group span2">
+            <label>Referral Suggestion <span class="label-hint">What to say when caller doesn't qualify for this area</span></label>
+            <textarea id="paReferral" rows="2" placeholder="e.g. You may want to contact a firm that specialises in criminal defence matters."></textarea>
+          </div>
+          <div class="form-group span2">
+            <div class="toggle-wrap">
+              <label class="toggle"><input type="checkbox" id="paEnabled" checked><span class="toggle-slider"></span></label>
+              <span style="font-size:14px;font-weight:500;color:var(--gray-700)">Active</span>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('practiceAreaModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('practiceAreaForm').requestSubmit()">Save Practice Area</button>
+    </div>
+  </div>
+</div>
+
 <!-- Webhook Modal -->
 <div class="modal-overlay" id="webhookModal">
   <div class="modal">
@@ -1118,8 +1196,8 @@ function saveSettings() {
 const PAGE_TITLES = {
   dashboard: 'Dashboard', calls: 'Calls & Transcripts', assistant: 'AI Assistant',
   parameters: 'Info to Collect', faqs: 'FAQs', context: 'Knowledge Files',
-  spellrules: 'Name Corrections', webhooks: 'Notifications',
-  calendly: 'Calendly Integration', apikeys: 'API Keys', test: 'Test Agent'
+  qualification: 'Lead Qualification', spellrules: 'Name Corrections',
+  webhooks: 'Notifications', calendly: 'Calendly Integration', apikeys: 'API Keys', test: 'Test Agent'
 };
 let currentPage = 'dashboard';
 
@@ -1155,6 +1233,7 @@ function loadCurrentPage() {
     parameters: loadParameters,
     faqs: loadFaqs,
     context: loadContextFiles,
+    qualification: loadPracticeAreas,
     spellrules: loadSpellRules,
     webhooks: loadWebhooks,
     calendly: loadCalendly,
@@ -2051,6 +2130,102 @@ function copyEmbed() {
   const text = document.getElementById('embedSnippet').textContent;
   if (text.startsWith('Select')) { toast('Select a key first', 'error'); return; }
   copyText(text);
+}
+
+// ── PRACTICE AREAS ────────────────────────────────────────────────────────────
+let editPracticeAreaId = null;
+
+async function loadPracticeAreas() {
+  const body = document.getElementById('practiceAreaBody');
+  body.innerHTML = '<tr class="loading-row"><td colspan="4"><span class="spinner"></span></td></tr>';
+  try {
+    const areas = await cp('/api/v1/practice-areas');
+    if (!areas.length) { body.innerHTML = '<tr><td colspan="4" class="table-empty">No practice areas yet — add one above</td></tr>'; return; }
+    body.innerHTML = areas.map(a => `
+      <tr>
+        <td>
+          <div style="font-weight:500">${esc(a.name)}</div>
+          ${a.description ? `<div style="font-size:12px;color:var(--gray-400);margin-top:2px">${esc(a.description.substring(0,80))}${a.description.length>80?'…':''}</div>` : ''}
+        </td>
+        <td style="font-size:13px;color:var(--gray-600);max-width:300px">
+          ${a.qualification_criteria ? esc(a.qualification_criteria.substring(0,100)) + (a.qualification_criteria.length>100?'…':'') : '<span style="color:var(--gray-400)">—</span>'}
+        </td>
+        <td>
+          <label class="toggle"><input type="checkbox" ${a.enabled?'checked':''} onchange="togglePracticeArea(${a.id},this.checked)"><span class="toggle-slider"></span></label>
+        </td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-secondary" onclick="editPracticeArea(${a.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deletePracticeArea(${a.id})">Delete</button>
+        </td>
+      </tr>`).join('');
+  } catch(e) { body.innerHTML = '<tr><td colspan="4" class="table-empty">Failed to load</td></tr>'; toast(e.message,'error'); }
+}
+
+function openPracticeAreaModal() {
+  editPracticeAreaId = null;
+  document.getElementById('practiceAreaModalTitle').textContent = 'Add Practice Area';
+  document.getElementById('practiceAreaForm').reset();
+  document.getElementById('paEnabled').checked = true;
+  document.getElementById('paOrder').value = 0;
+  openModal('practiceAreaModal');
+}
+
+async function editPracticeArea(id) {
+  try {
+    const a = await cp('/api/v1/practice-areas/' + id);
+    editPracticeAreaId = id;
+    document.getElementById('practiceAreaModalTitle').textContent = 'Edit Practice Area';
+    document.getElementById('paName').value = a.name;
+    document.getElementById('paOrder').value = a.display_order;
+    document.getElementById('paDescription').value = a.description || '';
+    document.getElementById('paQualCriteria').value = a.qualification_criteria || '';
+    document.getElementById('paDisqualSignals').value = a.disqualification_signals || '';
+    document.getElementById('paAmbigSignals').value = a.ambiguous_signals || '';
+    document.getElementById('paReferral').value = a.referral_suggestion || '';
+    document.getElementById('paEnabled').checked = a.enabled;
+    openModal('practiceAreaModal');
+  } catch(e) { toast('Could not load practice area: ' + e.message, 'error'); }
+}
+
+async function savePracticeArea(e) {
+  e.preventDefault();
+  const body = {
+    name: document.getElementById('paName').value,
+    display_order: parseInt(document.getElementById('paOrder').value) || 0,
+    description: document.getElementById('paDescription').value || null,
+    qualification_criteria: document.getElementById('paQualCriteria').value || null,
+    disqualification_signals: document.getElementById('paDisqualSignals').value || null,
+    ambiguous_signals: document.getElementById('paAmbigSignals').value || null,
+    referral_suggestion: document.getElementById('paReferral').value || null,
+    enabled: document.getElementById('paEnabled').checked,
+  };
+  try {
+    if (editPracticeAreaId) {
+      await cp('/api/v1/practice-areas/' + editPracticeAreaId, { method: 'PATCH', body });
+      toast('Practice area updated!', 'success');
+    } else {
+      await cp('/api/v1/practice-areas', { method: 'POST', body });
+      toast('Practice area added!', 'success');
+    }
+    closeModal('practiceAreaModal');
+    loadPracticeAreas();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function togglePracticeArea(id, enabled) {
+  try {
+    await cp('/api/v1/practice-areas/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'Practice area enabled' : 'Practice area disabled', 'success');
+  } catch(e) { toast('Update failed: ' + e.message, 'error'); loadPracticeAreas(); }
+}
+
+async function deletePracticeArea(id) {
+  if (!confirm('Delete this practice area? This cannot be undone.')) return;
+  try {
+    await cp('/api/v1/practice-areas/' + id, { method: 'DELETE' });
+    toast('Practice area deleted', 'success');
+    loadPracticeAreas();
+  } catch(e) { toast('Delete failed: ' + e.message, 'error'); }
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
