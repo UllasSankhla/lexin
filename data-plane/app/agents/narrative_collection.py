@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 _MIN_SEGMENTS = 2
 _MIN_WORDS_IN_SEGMENT = 4
 
+# After asking "Is there anything else?" this many times, complete regardless.
+# Prevents an infinite loop when the LLM repeatedly misclassifies "No" as not-done.
+_MAX_DONE_ASKS = 2
+
 # Filler phrases spoken while the caller is mid-narrative.
 _FILLERS = [
     "I see, please go on.",
@@ -48,8 +52,14 @@ _COMPLETION_CHECK_SYSTEM = (
 )
 
 _DONE_INTENT_SYSTEM = (
-    "A caller has been asked 'Is there anything else you would like to add?' "
-    "Does their response indicate they are done (no more to add)? "
+    "The caller was asked: 'Is there anything else you would like to add about your matter?'\n"
+    "Determine whether they want to STOP (nothing more to add) or CONTINUE (have more to say).\n\n"
+    "STOP \u2192 {\"done\": true}\n"
+    "  Examples: 'No' | 'No, that\\'s all' | 'Nope' | 'That\\'s it' | "
+    "'Nothing else' | 'I\\'m done' | 'That covers it'\n\n"
+    "CONTINUE \u2192 {\"done\": false}\n"
+    "  Examples: 'Yes actually' | 'Wait, I should mention' | "
+    "'There\\'s more' | 'I forgot to say'\n\n"
     "Reply ONLY valid JSON: {\"done\": true} or {\"done\": false}."
 )
 
@@ -88,6 +98,11 @@ class NarrativeCollectionAgent(AgentBase):
                 "segments": [],
                 "summary": None,
                 "case_type": None,
+                # how many times "Is there anything else?" has been asked
+                "done_ask_count": 0,
+                # meaningful-segment count at the time of the last completion check;
+                # prevents re-asking "anything else?" without any new content added
+                "segments_at_done_check": 0,
             }
 
         stage = internal_state.get("stage", "collecting")
@@ -111,13 +126,23 @@ class NarrativeCollectionAgent(AgentBase):
 
         # ── Stage: asking_done — did the caller say yes or no? ──────────────
         if stage == "asking_done":
+            # Safety cap: if we've already asked the maximum number of times,
+            # complete regardless of what the caller says next.
+            done_ask_count = internal_state.get("done_ask_count", 0)
+            if done_ask_count >= _MAX_DONE_ASKS:
+                logger.info(
+                    "NarrativeCollection: max done asks (%d) reached — completing", _MAX_DONE_ASKS
+                )
+                return self._complete(segments, config, internal_state)
+
             done = self._detect_done_intent(utterance)
             if done:
                 return self._complete(segments, config, internal_state)
             else:
-                # Caller wants to add more — accumulate and keep collecting
-                segments.append(utterance)
-                internal_state["segments"] = segments
+                # Caller wants to add more.
+                # Do NOT append the gate response ("No", "Actually...", etc.) to
+                # segments — it is a conversational reply, not narrative content.
+                # The caller's next actual statement will be appended normally.
                 internal_state["stage"] = "collecting"
                 logger.info(
                     "NarrativeCollection: caller wants to continue | segments=%d", len(segments)
@@ -136,10 +161,23 @@ class NarrativeCollectionAgent(AgentBase):
             len(segments), len(utterance.split()),
         )
 
-        # Only check for completion once we have enough meaningful content
-        if self._has_enough_content(segments) and self._narrative_complete(segments):
+        # Only check for completion once we have enough meaningful content AND
+        # at least one new meaningful segment has been added since we last asked
+        # "Is there anything else?" — prevents immediately re-asking after the
+        # caller says they want to continue.
+        meaningful_count = len([s for s in segments if len(s.split()) >= _MIN_WORDS_IN_SEGMENT])
+        segments_at_done_check = internal_state.get("segments_at_done_check", 0)
+        has_new_content = meaningful_count > segments_at_done_check
+
+        if has_new_content and self._has_enough_content(segments) and self._narrative_complete(segments):
+            done_ask_count = internal_state.get("done_ask_count", 0) + 1
+            internal_state["done_ask_count"] = done_ask_count
+            internal_state["segments_at_done_check"] = meaningful_count
             internal_state["stage"] = "asking_done"
-            logger.info("NarrativeCollection: narrative seems complete — asking if done")
+            logger.info(
+                "NarrativeCollection: narrative seems complete — asking if done (ask #%d)",
+                done_ask_count,
+            )
             return SubagentResponse(
                 status=AgentStatus.IN_PROGRESS,
                 speak="Is there anything else you'd like to add?",
