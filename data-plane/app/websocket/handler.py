@@ -92,6 +92,9 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     tts_playing = False
     tts_cancel = asyncio.Event()
 
+    # Timestamp of the last STT final event — used to measure end-to-end response latency.
+    last_utterance_t: list[float] = [0.0]
+
     # ── Send helpers (priority queue: 0=audio, 1=text, 2=sentinel) ───────────
     # Single send loop serialises all WebSocket writes; audio frames are
     # prioritised over text control messages so playback stays smooth.
@@ -138,7 +141,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             return
         tts_cancel.clear()
         tts_playing = True
-        t0 = time.monotonic()
         chunks_sent = 0
         try:
             await safe_send_text("server.tts_stream_start", {"audio_id": audio_id})
@@ -155,15 +157,23 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                     session.record_analytics("tts_first_chunk", "tts", first_chunk_latency)
                 pending.extend(chunk)
                 if len(pending) >= _TTS_MERGE_BYTES:
+                    if chunks_sent == 0 and last_utterance_t[0]:
+                        # First audio bytes queued for the caller — measure end-to-end response latency
+                        latency_ms = (time.monotonic() - last_utterance_t[0]) * 1000
+                        session.record_analytics("response_latency", "pipeline", latency_ms)
+                        last_utterance_t[0] = 0.0
                     await safe_send_binary(_encode_audio_frame(audio_id, bytes(pending)))
                     chunks_sent += 1
                     pending = bytearray()
             # Flush remaining audio then signal stream end to the client
             if pending:
+                if chunks_sent == 0 and last_utterance_t[0]:
+                    latency_ms = (time.monotonic() - last_utterance_t[0]) * 1000
+                    session.record_analytics("response_latency", "pipeline", latency_ms)
+                    last_utterance_t[0] = 0.0
                 await safe_send_binary(_encode_audio_frame(audio_id, bytes(pending)))
                 chunks_sent += 1
             await safe_send_text("server.tts_stream_end", {"audio_id": audio_id})
-            session.record_analytics("tts_stream_complete", "tts", (time.monotonic() - t0) * 1000)
         except Exception as exc:
             logger.error("TTS streaming error: %s", exc)
             await safe_send_text("server.error", {"code": "tts_error", "message": "Voice synthesis failed", "fatal": False})
@@ -184,7 +194,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         })
 
     async def on_final(text: str, confidence: float, elapsed_ms: float) -> None:
-        session.record_analytics("stt_utterance_final", "stt", elapsed_ms)
+        last_utterance_t[0] = time.monotonic()
         await safe_send_text("server.transcript_final", {"text": text, "confidence": confidence})
 
         if utterance_lock.locked():
@@ -396,7 +406,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             for t in transcript_turns[-8:]
         ]
 
-        t0 = time.monotonic()
         try:
             loop = asyncio.get_event_loop()
 
@@ -410,7 +419,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
             )
 
-            session.record_analytics("workflow_turn", "llm", (time.monotonic() - t0) * 1000)
             consecutive_errors[0] = 0
 
             # ── Safety net: never speak empty string ──────────────────────────
@@ -515,8 +523,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             record.end_reason      = reason
             db_session.commit()
 
-        # Record the end-of-call event in analytics so the reason is queryable
-        session.record_analytics("call.ended", "system", duration * 1000)
         for event in session.analytics_events:
             db_session.add(CallAnalytics(call_id=session.call_id, **event))
         db_session.commit()
