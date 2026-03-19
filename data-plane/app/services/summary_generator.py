@@ -35,8 +35,22 @@ def generate_call_summary(
             or collected_params.get("client_full_name")
             or collected_params.get("caller_name")
             or collected_params.get("name")
-            or "Unknown Caller"
         )
+
+    # Try concatenating first_name + last_name variants
+    if not caller_name:
+        first = next(
+            (collected_params[k] for k in collected_params if "first_name" in k),
+            None,
+        )
+        last = next(
+            (collected_params[k] for k in collected_params if "last_name" in k),
+            None,
+        )
+        if first or last:
+            caller_name = " ".join(filter(None, [first, last]))
+
+    caller_name = caller_name or "Unknown Caller"
 
     if not transcript_lines:
         return caller_name, "No transcript available for this call."
