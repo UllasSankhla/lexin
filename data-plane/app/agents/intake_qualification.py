@@ -168,10 +168,11 @@ class IntakeQualificationAgent(AgentBase):
             return self._respond_from_state(internal_state, config)
 
         # ── Gather inputs ────────────────────────────────────────────────────
-        collected: dict = {}
-        for entry in history:
-            if entry.get("role") == "collected":
-                collected.update(entry.get("data", {}))
+        # narrative_summary comes from NarrativeCollectionAgent.collected,
+        # case_type from hidden_collected — both land in config["_collected"]
+        # via _persist_response in the handler.  History entries never carry
+        # a "collected" role, so reading from config is the correct source.
+        collected: dict = config.get("_collected", {})
 
         narrative_summary = collected.get("narrative_summary", "")
         case_type = collected.get("case_type", "unknown")

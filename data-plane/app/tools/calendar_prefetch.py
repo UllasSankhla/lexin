@@ -15,11 +15,14 @@ class CalendarPrefetchTool(ToolBase):
     """
     Pre-fetches available appointment slots for the next 7 days.
 
-    Triggered when intake_qualification COMPLETES (fire_and_forget=False), so the
-    calendar API call runs concurrently with the intake_qualification LLM call.
-    The workflow awaits this tool's asyncio.Task before invoking the scheduling
-    agent, which can then skip both the event-type LLM match and the calendar
-    API round-trip by reading from config["_tool_results"].
+    Triggered when narrative_collection COMPLETES (fire_and_forget=False,
+    await_before_agent="scheduling"), so the calendar API call runs concurrently
+    with the intake_qualification LLM call.  The workflow only awaits this task
+    immediately before invoking the scheduling agent, giving the Calendly API
+    call the full intake_qualification processing window to complete.
+
+    The scheduling agent reads the result from config["_tool_results"]["prefetched_slots"]
+    and skips its own calendar API round-trip and event-type LLM match.
 
     Writes to ctx.shared
     --------------------
@@ -40,7 +43,7 @@ class CalendarPrefetchTool(ToolBase):
         )
         search_end = search_start + timedelta(days=7)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             slots = await loop.run_in_executor(
                 None,
@@ -50,7 +53,10 @@ class CalendarPrefetchTool(ToolBase):
                 ),
             )
         except Exception as exc:
-            logger.warning("CalendarPrefetchTool: fetch failed for call %s: %s", ctx.call_id, exc)
+            logger.warning(
+                "CalendarPrefetchTool: fetch failed for call %s: %s",
+                ctx.call_id, exc, exc_info=True,
+            )
             return ToolResult(success=False, error=str(exc))
 
         ctx.shared["prefetched_slots"] = slots
