@@ -733,8 +733,9 @@
       <div class="card-header"><span class="card-title">Live Demo</span></div>
       <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
         <p style="color:var(--gray-600);font-size:14px">Opens the demo page in a new tab. Make sure you have at least one API key generated and your assistant configured.</p>
-        <div>
-          <a id="demoLink" href="#" target="_blank" class="btn btn-primary" onclick="openDemo(event)">Open Demo Page</a>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <a id="demoLink" href="#" target="_blank" class="btn btn-primary" onclick="openDemo(event)">Open Voice Demo</a>
+          <a id="chatDemoLink" href="#" target="_blank" class="btn btn-secondary" onclick="openChatDemo(event)">Open Chat Demo</a>
         </div>
       </div>
     </div>
@@ -2119,6 +2120,13 @@ function openDemo(e) {
   const params = new URLSearchParams({ voice_url: DP });
   if (key) params.set('key', key);
   e.currentTarget.href = '/static/demo.html?' + params.toString();
+}
+
+function openChatDemo(e) {
+  const key = document.getElementById('embedKeySelect').value;
+  const params = new URLSearchParams({ voice_url: DP });
+  if (key) params.set('key', key);
+  e.currentTarget.href = '/static/chat-demo.html?' + params.toString();
 }
 
 function renderEmbed() {
