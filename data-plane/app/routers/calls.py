@@ -41,6 +41,7 @@ def _format_call(record: CallRecord) -> dict:
 @router.post("/initiate")
 async def initiate_call(
     request: Request,
+    mode: str = Query("voice", pattern="^(voice|text)$"),
     db: Session = Depends(get_db),
     customer_auth: tuple[str, str] = Depends(require_customer_key),
 ):
@@ -64,6 +65,7 @@ async def initiate_call(
         state="connecting",
         origin_url=origin_url,
         user_agent=user_agent,
+        mode=mode,
     )
     db.add(record)
     db.commit()
@@ -75,11 +77,15 @@ async def initiate_call(
     ws_scheme = "wss" if forwarded_proto == "https" else "ws"
     ws_url = f"{ws_scheme}://{forwarded_host}/ws/call?token={session_token}"
 
-    logger.info("Call initiated: call_id=%s customer=%r owner=%s token=%s...", call_id, customer_name, owner_id, session_token[:8])
+    logger.info(
+        "Call initiated: call_id=%s mode=%s customer=%r owner=%s token=%s...",
+        call_id, mode, customer_name, owner_id, session_token[:8],
+    )
     return {
         "call_id": call_id,
         "session_token": session_token,
         "ws_url": ws_url,
+        "mode": mode,
     }
 
 

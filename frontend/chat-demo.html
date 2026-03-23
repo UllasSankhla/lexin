@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Voice Booking Widget Demo</title>
+  <title>Chat Booking Widget Demo</title>
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: linear-gradient(135deg, #0f766e 0%, #1d4ed8 100%);
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -34,10 +34,10 @@
     }
     .features li {
       padding: 10px 14px;
-      background: #f5f5ff;
+      background: #f0fdfa;
       border-radius: 8px;
       font-size: 14px;
-      color: #4F46E5;
+      color: #0f766e;
     }
     .features li::before { content: "✓ "; font-weight: 700; }
     .config-section {
@@ -57,7 +57,7 @@
       margin-bottom: 12px;
       outline: none;
     }
-    input:focus { border-color: #4F46E5; }
+    input:focus { border-color: #0f766e; }
     .hint {
       font-size: 12px;
       color: #aaa;
@@ -65,7 +65,7 @@
       margin-bottom: 12px;
     }
     .reload-btn {
-      background: #4F46E5;
+      background: #0f766e;
       color: white;
       border: none;
       border-radius: 10px;
@@ -75,7 +75,19 @@
       cursor: pointer;
       width: 100%;
     }
-    .reload-btn:hover { background: #4338ca; }
+    .reload-btn:hover { background: #0d6460; }
+    .mode-badge {
+      display: inline-block;
+      background: #0f766e22;
+      color: #0f766e;
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
     .widget-note {
       text-align: center;
       color: #999;
@@ -95,17 +107,27 @@
     }
     .code-block .key { color: #7ec8e3; }
     .code-block .val { color: #b8e0b8; }
+    .demo-link {
+      display: block;
+      text-align: center;
+      margin-top: 20px;
+      color: #0f766e;
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .demo-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <div class="demo-card">
-    <h1>🎙️ Voice Booking Assistant</h1>
-    <p>Click the button in the bottom-right corner to start a voice call with your AI appointment booking assistant.</p>
+    <div class="mode-badge">Text Mode</div>
+    <h1>💬 Chat Booking Assistant</h1>
+    <p>Click the chat button in the bottom-right corner to start a text conversation with your AI appointment booking assistant — no microphone required.</p>
 
     <ul class="features">
-      <li>Real-time speech recognition</li>
+      <li>No microphone needed</li>
       <li>AI-powered conversation</li>
-      <li>Natural voice responses</li>
+      <li>Typed message input</li>
       <li>Auto parameter collection</li>
       <li>Appointment scheduling</li>
       <li>Embeddable anywhere</li>
@@ -118,13 +140,13 @@
 
       <label>Customer Key</label>
       <input type="text" id="cfg-customer-key" value="ck_live_359b05dfdffaf61eed7e51f1c34365c4e900ee1c" />
-      <p class="hint">Pass this in the X-Customer-Key header — required to initiate calls.</p>
+      <p class="hint">Pass this in the X-Customer-Key header — required to initiate sessions.</p>
 
       <label>Primary Color</label>
-      <input type="text" id="cfg-color" value="#4F46E5" />
+      <input type="text" id="cfg-color" value="#0f766e" />
 
       <label>Button Label</label>
-      <input type="text" id="cfg-label" value="Book Appointment" />
+      <input type="text" id="cfg-label" value="Chat with us" />
 
       <button class="reload-btn" onclick="reloadWidget()">Apply & Reload Widget</button>
     </div>
@@ -134,23 +156,22 @@
       &nbsp;&nbsp;<span class="key">src</span>=<span class="val">"booking-widget.js"</span><br>
       &nbsp;&nbsp;<span class="key">data-api-url</span>=<span class="val">"https://your-domain.com"</span><br>
       &nbsp;&nbsp;<span class="key">data-customer-key</span>=<span class="val">"ck_live_..."</span><br>
-      &nbsp;&nbsp;<span class="key">data-theme</span>=<span class="val">"light"</span><br>
-      &nbsp;&nbsp;<span class="key">data-position</span>=<span class="val">"bottom-right"</span><br>
-      &nbsp;&nbsp;<span class="key">data-primary-color</span>=<span class="val">"#4F46E5"</span><br>
+      &nbsp;&nbsp;<span class="key">data-mode</span>=<span class="val">"text"</span><br>
+      &nbsp;&nbsp;<span class="key">data-primary-color</span>=<span class="val">"#0f766e"</span><br>
+      &nbsp;&nbsp;<span class="key">data-button-label</span>=<span class="val">"Chat with us"</span><br>
       &gt;&lt;/<span class="key">script</span>&gt;
     </div>
 
-    <p class="widget-note">The widget loads automatically — look for the microphone button in the bottom-right corner.</p>
-    <a style="display:block;text-align:center;margin-top:20px;color:#4F46E5;font-size:13px;text-decoration:none;" href="chat-demo.html">Switch to Chat (Text) Demo →</a>
+    <p class="widget-note">The widget loads automatically — look for the chat button in the bottom-right corner.</p>
+    <a class="demo-link" href="demo.html">← Switch to Voice Demo</a>
   </div>
 
   <script>
-    const DEFAULT_VOICE_URL = location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://voice.lexinflow.com';
+    const DEFAULT_API_URL = location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://voice.lexinflow.com';
 
-    // Read URL params — allow admin console to pre-fill via ?key=...&voice_url=...
     const _params = new URLSearchParams(location.search);
     const _initKey = _params.get('key') || '';
-    const _initUrl = _params.get('voice_url') || DEFAULT_VOICE_URL;
+    const _initUrl = _params.get('voice_url') || DEFAULT_API_URL;
 
     document.getElementById('cfg-api-url').value = _initUrl;
     if (_initKey) document.getElementById('cfg-customer-key').value = _initKey;
@@ -173,11 +194,11 @@
       script.dataset.customerKey = customerKey;
       script.dataset.primaryColor = color;
       script.dataset.buttonLabel = label;
+      script.dataset.mode = 'text';
       script.dataset.debug = 'true';
       document.body.appendChild(script);
     }
 
-    // Auto-load on page open
     reloadWidget();
   </script>
 </body>

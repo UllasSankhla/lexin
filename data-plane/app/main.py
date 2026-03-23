@@ -56,7 +56,7 @@ async def websocket_call(
     websocket: WebSocket,
     token: str = Query(...),
 ):
-    """Main WebSocket endpoint for voice calls."""
+    """Main WebSocket endpoint for voice and text calls. Mode is determined by the call record."""
     await websocket.accept()
 
     config = await get_cached_config(token)
@@ -66,7 +66,6 @@ async def websocket_call(
         await websocket.close(code=4001)
         return
 
-    # Find call record by token
     db = SessionLocal()
     try:
         from app.models.call_record import CallRecord
@@ -76,14 +75,15 @@ async def websocket_call(
             return
 
         call_id = record.id
+        mode = record.mode or "voice"
         session = CallSession(
             call_id=call_id,
             session_token=token,
             config=config,
         )
 
-        logger.info("WebSocket opened for call %s", call_id)
-        await handle_call(websocket, session, db)
+        logger.info("WebSocket opened for call %s (mode=%s)", call_id, mode)
+        await handle_call(websocket, session, db, mode=mode)
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for token %s...", token[:8])
     except Exception as e:

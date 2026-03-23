@@ -29,6 +29,7 @@
     primaryColor: (scriptEl && scriptEl.dataset.primaryColor) || '#4F46E5',
     buttonLabel: (scriptEl && scriptEl.dataset.buttonLabel) || 'Book Appointment',
     debug: (scriptEl && scriptEl.dataset.debug) === 'true',
+    mode: (scriptEl && scriptEl.dataset.mode) || 'voice',  // "voice" | "text"
   };
 
   const log = (...args) => cfg.debug && console.log('[BookingWidget]', ...args);
@@ -233,6 +234,30 @@
         font-weight: 700;
         margin-bottom: 6px;
       }
+
+      .text-input-area {
+        display: flex; gap: 8px; align-items: center;
+      }
+      .chat-input {
+        flex: 1;
+        border: 1px solid ${cfg.theme === 'dark' ? '#444' : '#ddd'};
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 14px;
+        background: ${cfg.theme === 'dark' ? '#2a2a3e' : '#fff'};
+        color: ${cfg.theme === 'dark' ? '#e0e0f0' : '#1a1a2e'};
+        outline: none;
+        font-family: inherit;
+      }
+      .chat-input:focus { border-color: ${cfg.primaryColor}; }
+      .chat-send-btn {
+        background: ${cfg.primaryColor}; color: white;
+        border: none; border-radius: 8px;
+        padding: 8px 14px; font-size: 14px; font-weight: 600;
+        cursor: pointer; white-space: nowrap; transition: filter 0.15s;
+      }
+      .chat-send-btn:hover { filter: brightness(1.1); }
+      .chat-send-btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
     `;
 
     const numBars = 20;
@@ -240,15 +265,19 @@
       `<div class="waveform-bar" id="bar-${i}" style="height:4px"></div>`
     ).join('');
 
+    const buttonIconHtml = cfg.mode === 'text'
+      ? `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="white">
+           <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+         </svg>`
+      : `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+           <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm6.5 9.5A6.5 6.5 0 0 1 5.5 10.5H3.5a8.5 8.5 0 0 0 7.5 8.45V21h-3v2h7v-2h-3v-2.05A8.5 8.5 0 0 0 19.5 10.5h-2z"/>
+         </svg>`;
+
     shadowRoot.innerHTML = `
       <style>${styles}</style>
       <div class="pulse-ring" id="pulse-ring"></div>
       <button class="widget-btn" id="main-btn" aria-label="${cfg.buttonLabel}">
-        <span class="mic-icon">
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm6.5 9.5A6.5 6.5 0 0 1 5.5 10.5H3.5a8.5 8.5 0 0 0 7.5 8.45V21h-3v2h7v-2h-3v-2.05A8.5 8.5 0 0 0 19.5 10.5h-2z"/>
-          </svg>
-        </span>
+        <span class="mic-icon">${buttonIconHtml}</span>
       </button>
       <div class="panel" id="panel">
         <div class="panel-header">
@@ -262,7 +291,7 @@
           </div>
         </div>
 
-        <div class="waveform-container" id="waveform">${barsHtml}</div>
+        <div class="waveform-container" id="waveform" style="${cfg.mode === 'text' ? 'display:none' : ''}">${barsHtml}</div>
 
         <div class="transcript-box" id="transcript-box">
           <span style="color:#999;font-size:13px">Your conversation will appear here…</span>
@@ -275,8 +304,16 @@
           </div>
         </div>
 
+        ${cfg.mode === 'text' ? `
+        <div class="text-input-area" id="text-input-area" style="display:none">
+          <input class="chat-input" id="chat-input" type="text"
+                 placeholder="Type your message…" autocomplete="off" />
+          <button class="chat-send-btn" id="send-btn" disabled>Send</button>
+        </div>
+        ` : ''}
+
         <div class="action-row">
-          <button class="end-call-btn" id="end-call-btn" style="display:none">End Call</button>
+          <button class="end-call-btn" id="end-call-btn" style="display:none">${cfg.mode === 'text' ? 'End Chat' : 'End Call'}</button>
         </div>
 
         <div class="done-message" id="done-message" style="display:none">
@@ -289,6 +326,18 @@
     shadowRoot.getElementById('main-btn').addEventListener('click', onMainButtonClick);
     shadowRoot.getElementById('close-btn').addEventListener('click', closePanel);
     shadowRoot.getElementById('end-call-btn').addEventListener('click', endCall);
+
+    if (cfg.mode === 'text') {
+      const sendBtn = shadowRoot.getElementById('send-btn');
+      const chatInput = shadowRoot.getElementById('chat-input');
+      if (sendBtn) sendBtn.addEventListener('click', sendTextMessage);
+      if (chatInput) chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendTextMessage();
+        }
+      });
+    }
   }
 
   // ── State Transitions ─────────────────────────────────────────────────────────
@@ -316,15 +365,26 @@
         panel.classList.add('visible');
         statusEl.textContent = 'Connecting…';
         endBtn.style.display = 'inline-block';
+        if (cfg.mode === 'text') {
+          const textArea = shadowRoot.getElementById('text-input-area');
+          if (textArea) textArea.style.display = 'flex';
+        }
         setTranscript('<span style="color:#999">Connecting to assistant…</span>');
         break;
       case STATES.ACTIVE:
-        pulseRing.classList.add('active');
-        statusEl.textContent = 'Listening';
+        if (cfg.mode === 'text') {
+          pulseRing.classList.remove('active');
+          statusEl.textContent = 'Ready';
+          enableChatInput();
+        } else {
+          pulseRing.classList.add('active');
+          statusEl.textContent = 'Listening';
+        }
         endBtn.style.display = 'inline-block';
         break;
       case STATES.THINKING:
         statusEl.textContent = 'Thinking';
+        if (cfg.mode === 'text') disableChatInput();
         break;
       case STATES.SPEAKING:
         statusEl.textContent = 'Speaking';
@@ -421,6 +481,38 @@
     setState(STATES.DONE);
   }
 
+  // ── Text Mode Helpers ─────────────────────────────────────────────────────────
+  function enableChatInput() {
+    const input = shadowRoot.getElementById('chat-input');
+    const btn = shadowRoot.getElementById('send-btn');
+    if (input) { input.disabled = false; input.focus(); }
+    if (btn) btn.disabled = false;
+  }
+
+  function disableChatInput() {
+    const input = shadowRoot.getElementById('chat-input');
+    const btn = shadowRoot.getElementById('send-btn');
+    if (input) input.disabled = true;
+    if (btn) btn.disabled = true;
+  }
+
+  function sendTextMessage() {
+    const input = shadowRoot.getElementById('chat-input');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text || state === STATES.THINKING || !ws || ws.readyState !== WebSocket.OPEN) return;
+    input.value = '';
+    disableChatInput();
+    appendTranscript('caller', text);
+    ws.send(JSON.stringify({
+      type: 'client.message',
+      seq: ++wsSeq,
+      ts: Date.now() / 1000,
+      payload: { text },
+    }));
+    setState(STATES.THINKING);
+  }
+
   // ── Call Flow ──────────────────────────────────────────────────────────────────
   async function startCall() {
     setState(STATES.CONNECTING);
@@ -429,7 +521,8 @@
     try {
       const initiateHeaders = { 'Content-Type': 'application/json' };
       if (cfg.customerKey) initiateHeaders['X-Customer-Key'] = cfg.customerKey;
-      const resp = await fetch(`${cfg.apiUrl}/api/v1/calls/initiate`, {
+      const modeParam = cfg.mode === 'text' ? '?mode=text' : '';
+      const resp = await fetch(`${cfg.apiUrl}/api/v1/calls/initiate${modeParam}`, {
         method: 'POST',
         headers: initiateHeaders,
       });
@@ -437,10 +530,12 @@
       const data = await resp.json();
       callId = data.call_id;
       const wsUrl = data.ws_url;
-      log('Call initiated:', callId, 'ws:', wsUrl);
+      log('Call initiated:', callId, 'mode:', cfg.mode, 'ws:', wsUrl);
 
       await openWebSocket(wsUrl);
-      await startAudioCapture();
+      if (cfg.mode !== 'text') {
+        await startAudioCapture();
+      }
     } catch (err) {
       log('Failed to start call:', err);
       setTranscript(`<span style="color:#ef4444">Failed to connect: ${escapeHtml(err.message)}</span>`);
@@ -542,9 +637,16 @@
         setState(STATES.ACTIVE);
         break;
 
-      case 'server.response_text':
+      case 'server.message':
+        // Text mode: assistant reply delivered as a plain text message (no TTS)
         hideThinking();
         appendTranscript('assistant', payload.text);
+        if (cfg.mode === 'text') setState(STATES.ACTIVE);
+        break;
+
+      case 'server.response_text':
+        hideThinking();
+        if (cfg.mode !== 'text') appendTranscript('assistant', payload.text);
         break;
 
       case 'server.parameter_collected':

@@ -25,3 +25,4 @@ class CallRecord(Base):
     booking_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     booking_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     end_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mode: Mapped[str | None] = mapped_column(Text, nullable=True)  # "voice" | "text"

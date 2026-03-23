@@ -1,14 +1,15 @@
-"""Main WebSocket connection handler for voice calls.
+"""Main WebSocket connection handler — supports voice and text modes.
 
-Orchestration flow
-==================
-1.  STT session opens (Deepgram nova-2-phonecall); greeting is spoken.
-2.  data_collection agent is invoked with empty utterance → first field question spoken.
-3.  Read loop: binary frames → STT; text frames → control messages.
-4.  STT on_final fires → _process_utterance(text).
-5.  _process_utterance routes to the appropriate agent via Router.
-6.  Agent response carries:
-      .speak          → TTS + transcript
+Orchestration flow (both modes)
+================================
+1.  Transport starts (voice: STT session opens; text: no-op).
+2.  Greeting and opening data_collection invocation → response delivered via transport.
+3.  Two concurrent tasks run:
+      _ws_read_loop       — feeds WebSocket frames to the transport
+      _utterance_processor — consumes transport.utterance_queue one at a time
+4.  _process_utterance routes each utterance through the agent system via Router.
+5.  Agent response carries:
+      .speak          → delivered via transport (voice: TTS stream; text: JSON message)
       .collected      → DB persist + client event
       .booking        → DB persist + client event
 """
@@ -18,9 +19,9 @@ import asyncio
 import itertools
 import json
 import logging
-import struct
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -30,29 +31,26 @@ from app.agents.workflow import WorkflowGraph
 from app.agents.router import Router
 from app.agents.registry import build_registry
 from app.agents.base import AgentStatus
-from app.pipeline.stt import STTSession
-from app.pipeline.tts import TTSClient
 from app.services.config_client import get_cached_config
 from app.services.transcript_store import save_transcript
 from app.tools.base import ToolTrigger, ToolContext
 from app.tools.registry import resolve_tool
 from app.websocket.session import CallSession
 from app.websocket.state_machine import CallState
+from app.transport.base import BaseTransport
+from app.transport.voice_transport import VoiceTransport
+from app.transport.text_transport import TextTransport
 
 logger = logging.getLogger(__name__)
 
 
-# ── Frame helpers ─────────────────────────────────────────────────────────────
-
-def _encode_audio_frame(audio_id: str, audio_bytes: bytes) -> bytes:
-    id_bytes = audio_id.encode("utf-8")
-    return struct.pack("<I", len(id_bytes)) + id_bytes + audio_bytes
-
-
-# ── Main handler ──────────────────────────────────────────────────────────────
-
-async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
-    """Orchestrate a voice call session over a WebSocket connection."""
+async def handle_call(
+    ws: WebSocket,
+    session: CallSession,
+    db_session,
+    mode: Literal["voice", "text"] = "voice",
+) -> None:
+    """Orchestrate a call session over a WebSocket connection."""
     from app.models.call_analytics import CallAnalytics
     from app.models.call_record import CallRecord
 
@@ -64,47 +62,28 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     graph = WorkflowGraph(APPOINTMENT_BOOKING)
     session.graph = graph
     turn_counter = [0]
-    collected_all: dict[str, str] = {}   # accumulates confirmed fields across turns
+    collected_all: dict[str, str] = {}
     booking_result: dict = {}
     notes_buffer: str = ""
-    transcript_turns: list[dict] = []    # for decider history and transcript store
+    transcript_turns: list[dict] = []
 
     router = Router(graph)
     registry = build_registry(session.call_id, transcript_turns)
-
-    tts = TTSClient(voice=assistant_cfg.get("persona_voice"))
-
     utterance_lock = asyncio.Lock()
-    consecutive_errors = [0]   # reset on any successful turn; triggers end-call after threshold
-
-    # TTS streaming state — used for barge-in (interruption) detection.
-    tts_playing = False
-    tts_cancel = asyncio.Event()
-
-    # Timestamp of the last STT final event — used to measure end-to-end response latency.
-    last_utterance_t: list[float] = [0.0]
+    consecutive_errors = [0]
 
     # Shared mutable store across all tool invocations for this call.
-    # Tools write results here; subsequent tools and agents read from it via
-    # config["_tool_results"].
     tool_shared: dict = {}
-
-    # Tracks pending (fire_and_forget=False) tool tasks keyed by tool_class name.
-    # Value is (task, await_before_agent) where await_before_agent is the agent_id
-    # that should trigger the await, or None to await before any agent.
     pending_tool_tasks: dict[str, tuple[asyncio.Task, str | None]] = {}
 
     # ── Send helpers (priority queue: 0=audio, 1=text, 2=sentinel) ───────────
-    # Single send loop serialises all WebSocket writes; audio frames are
-    # prioritised over text control messages so playback stays smooth.
-
     _send_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
     _send_counter = itertools.count()
 
     async def _send_loop() -> None:
         while True:
             _priority, _, item = await _send_queue.get()
-            if item is None:  # sentinel — drain complete, stop loop
+            if item is None:
                 _send_queue.task_done()
                 break
             kind, data = item
@@ -129,93 +108,11 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         logger.debug("→ [binary] %d bytes (audio)", len(data))
         await _send_queue.put((0, next(_send_counter), ("binary", data)))
 
-    # Merge small TTS PCM chunks into ~8 KB frames before sending to reduce
-    # the number of WebSocket frames and smooth out audio delivery.
-    _TTS_MERGE_BYTES = 8192
-
-    async def _send_tts(text: str, audio_id: str) -> None:
-        nonlocal tts_playing
-        if not text or not text.strip():
-            logger.warning("_send_tts called with empty text — skipping (audio_id=%s)", audio_id)
-            return
-        tts_cancel.clear()
-        tts_playing = True
-        chunks_sent = 0
-        try:
-            await safe_send_text("server.tts_stream_start", {"audio_id": audio_id})
-            pending = bytearray()
-            async for chunk, first_chunk_latency in tts.stream(text):
-                if tts_cancel.is_set():
-                    logger.info(
-                        "TTS stream interrupted (barge-in) after %d chunks — audio_id=%s",
-                        chunks_sent, audio_id,
-                    )
-                    await safe_send_text("server.tts_interrupted", {"audio_id": audio_id})
-                    return
-                if first_chunk_latency is not None:
-                    session.record_analytics("tts_first_chunk", "tts", first_chunk_latency)
-                pending.extend(chunk)
-                if len(pending) >= _TTS_MERGE_BYTES:
-                    if chunks_sent == 0 and last_utterance_t[0]:
-                        # First audio bytes queued for the caller — measure end-to-end response latency
-                        latency_ms = (time.monotonic() - last_utterance_t[0]) * 1000
-                        session.record_analytics("response_latency", "pipeline", latency_ms)
-                        last_utterance_t[0] = 0.0
-                    await safe_send_binary(_encode_audio_frame(audio_id, bytes(pending)))
-                    chunks_sent += 1
-                    pending = bytearray()
-            # Flush remaining audio then signal stream end to the client
-            if pending:
-                if chunks_sent == 0 and last_utterance_t[0]:
-                    latency_ms = (time.monotonic() - last_utterance_t[0]) * 1000
-                    session.record_analytics("response_latency", "pipeline", latency_ms)
-                    last_utterance_t[0] = 0.0
-                await safe_send_binary(_encode_audio_frame(audio_id, bytes(pending)))
-                chunks_sent += 1
-            await safe_send_text("server.tts_stream_end", {"audio_id": audio_id})
-        except Exception as exc:
-            logger.error("TTS streaming error: %s", exc)
-            await safe_send_text("server.error", {"code": "tts_error", "message": "Voice synthesis failed", "fatal": False})
-        finally:
-            tts_playing = False
-
-    # ── STT callbacks ─────────────────────────────────────────────────────────
-
-    async def on_interim(text: str, confidence: float) -> None:
-        if tts_playing and not tts_cancel.is_set():
-            logger.info(
-                "Barge-in detected while TTS playing — cancelling stream | text=%r",
-                text[:60],
-            )
-            tts_cancel.set()
-        await safe_send_text("server.transcript_interim", {
-            "text": text, "confidence": confidence, "is_final": False,
-        })
-
-    async def on_final(text: str, confidence: float, elapsed_ms: float) -> None:
-        last_utterance_t[0] = time.monotonic()
-        await safe_send_text("server.transcript_final", {"text": text, "confidence": confidence})
-
-        if utterance_lock.locked():
-            if not tts_cancel.is_set():
-                logger.debug(
-                    "Dropping utterance %r — previous turn still processing, no barge-in",
-                    text[:40],
-                )
-                return
-            logger.info(
-                "Barge-in utterance queued — waiting for utterance_lock | text=%r",
-                text[:40],
-            )
-        async with utterance_lock:
-            await _process_utterance(text)
-
-    stt = STTSession(
-        on_interim=on_interim,
-        on_final=on_final,
-        language=assistant_cfg.get("language", "en-US"),
-        spell_rules=config.get("spell_rules", []),
-    )
+    # ── Transport ─────────────────────────────────────────────────────────────
+    if mode == "text":
+        transport: BaseTransport = TextTransport(safe_send_text)
+    else:
+        transport = VoiceTransport(safe_send_text, safe_send_binary, session, assistant_cfg)
 
     # ── Core: process a caller utterance through the agent system ─────────────
 
@@ -244,7 +141,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                     ))
             db_session.commit()
         if response.hidden_collected:
-            # Backend-only fields: accumulate for webhook/downstream but do NOT send UI events
             for field_name, field_value in response.hidden_collected.items():
                 if field_name not in collected_all:
                     collected_all[field_name] = field_value
@@ -275,7 +171,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         duration_sec: float | None = None,
         booking_override: dict | None = None,
     ) -> ToolContext:
-        """Build a ToolContext snapshot for the current call state."""
         return ToolContext(
             call_id=session.call_id,
             config=config,
@@ -288,16 +183,8 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         )
 
     async def _invoke_tools(trigger: ToolTrigger, agent_id: str | None = None) -> None:
-        """Start AGENT_COMPLETE tools matching (trigger, agent_id).
-
-        fire_and_forget=False tools are stored in pending_tool_tasks and awaited
-        by _await_pending_tools() before the appropriate agent runs.
-        fire_and_forget=True tools run independently in the background.
-        CALL_END tools are handled directly by _finalize_call.
-        """
         if trigger == ToolTrigger.CALL_END:
-            return  # handled by _finalize_call via _run_call_end_tools
-
+            return
         bindings = [
             b for b in graph.workflow.tools
             if b.trigger == trigger
@@ -305,10 +192,9 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         ]
         if not bindings:
             return
-
         for binding in bindings:
             tool = resolve_tool(binding.tool_class)
-            ctx  = _make_tool_ctx()
+            ctx = _make_tool_ctx()
             task = asyncio.create_task(tool.run(ctx))
             if not binding.fire_and_forget:
                 pending_tool_tasks[binding.tool_class] = (task, binding.await_before_agent)
@@ -320,12 +206,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 logger.debug("Tool %s started (fire-and-forget)", binding.tool_class)
 
     async def _await_pending_tools(current_agent_id: str) -> None:
-        """Await pending tool tasks that should complete before current_agent_id runs.
-
-        Tasks with await_before_agent=None are awaited before any agent.
-        Tasks with await_before_agent set are only awaited before that specific agent.
-        Results land in tool_shared, exposed to agents via config["_tool_results"].
-        """
         for name, (task, await_before) in list(pending_tool_tasks.items()):
             if await_before is not None and await_before != current_agent_id:
                 continue
@@ -347,23 +227,12 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         recent_history: list[dict],
         chain_depth: int = 0,
     ) -> tuple[str, str | None]:
-        """
-        Invoke agent_id, persist its response, then follow the declared edge.
-        Returns (accumulated_speak_text, finalize_reason_or_None).
-        finalize_reason is non-None when edge target is "end".
-        Chains synchronously within the same turn for edges like "scheduling",
-        "resume", etc. Stops and returns when edge is "decider".
-        Max chain depth = 5 to prevent cycles.
-        """
         MAX_CHAIN = 5
-
-        # Await pending tool tasks whose await_before_agent matches this agent —
-        # results land in tool_shared, exposed to the agent via config["_tool_results"].
         await _await_pending_tools(agent_id)
 
         enriched_config = {
             **config,
-            "_collected":    dict(collected_all),   # copy — agents must not mutate handler state
+            "_collected":    dict(collected_all),
             "_booking":      booking_result,
             "_notes":        notes_buffer,
             "_tool_results": tool_shared,
@@ -396,29 +265,21 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
         await _persist_response(response)
 
-        # Fire AGENT_COMPLETE tools immediately after a COMPLETED response — before
-        # following the edge — so they start as early as possible (e.g. calendar
-        # pre-fetch overlaps with graph edge resolution and chain setup).
         if response.status == AgentStatus.COMPLETED:
             await _invoke_tools(ToolTrigger.AGENT_COMPLETE, agent_id)
 
         speak = response.speak or ""
 
-        # ── Follow edge ───────────────────────────────────────────────────────
-
         if edge.target == "decider":
             return speak, None
-
         if edge.target == "end":
             return speak, edge.reason or "completed"
-
         if chain_depth >= MAX_CHAIN:
             logger.warning(
                 "Edge chain depth %d exceeded at agent=%s — stopping, target=%s",
                 chain_depth, agent_id, edge.target,
             )
             return speak, None
-
         if edge.target == "resume":
             resume_id = router.pop_resume()
             if resume_id:
@@ -428,7 +289,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                 return (speak + " " + resume_speak).strip(), finalize_reason
             return speak, None
 
-        # "<node_id>" — chain to another node immediately
         chain_speak, finalize_reason = await _invoke_and_follow(
             edge.target, "", current_turn, loop, recent_history, chain_depth + 1
         )
@@ -453,19 +313,16 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         try:
             loop = asyncio.get_running_loop()
 
-            # ── Step 1: select agent (WAITING_CONFIRM enforced before LLM) ───
             agent_id, interrupt = await loop.run_in_executor(
                 None, lambda: router.select(caller_text, recent_history)
             )
 
-            # ── Step 2: invoke and follow edges until "decider" or "end" ─────
             speak_text, finalize_reason = await _invoke_and_follow(
                 agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
             )
 
             consecutive_errors[0] = 0
 
-            # ── Safety net: never speak empty string ──────────────────────────
             if not speak_text or not speak_text.strip():
                 logger.warning("speak_text empty after full chain — using recovery phrase")
                 speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
@@ -475,11 +332,8 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
             audio_id = f"resp-{seq[0] + 1}"
             await safe_send_text("server.response_text", {"text": speak_text, "audio_id": audio_id})
+            await transport.send_response(speak_text, audio_id)
 
-            # ── TTS ───────────────────────────────────────────────────────────
-            await _send_tts(speak_text, audio_id)
-
-            # ── Finalize if edge said "end" ───────────────────────────────────
             if finalize_reason is not None:
                 await _finalize_call(finalize_reason)
 
@@ -492,11 +346,11 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             error_policy = graph.workflow.error_policy
             if consecutive_errors[0] >= error_policy.max_consecutive_errors:
                 logger.error(
-                    "Call %s: %d consecutive errors — ending call cleanly",
+                    "Call %s: %d consecutive errors — ending call",
                     session.call_id, error_policy.max_consecutive_errors,
                 )
                 try:
-                    await _send_tts(
+                    await transport.send_response(
                         "I'm sorry, I'm having technical difficulties. "
                         "Someone will follow up with you shortly. Goodbye!",
                         f"err-{seq[0] + 1}",
@@ -513,14 +367,13 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
                     await safe_send_text("server.response_text", {
                         "text": recovery, "audio_id": f"err-{seq[0] + 1}",
                     })
-                    await _send_tts(recovery, f"err-{seq[0] + 1}")
+                    await transport.send_response(recovery, f"err-{seq[0] + 1}")
                 except Exception:
                     pass
 
     # ── Completion ────────────────────────────────────────────────────────────
 
     async def _run_call_end_tools(ctx: ToolContext) -> None:
-        """Run CALL_END tool bindings sequentially so each can read ctx.shared written by the previous."""
         bindings = [b for b in graph.workflow.tools if b.trigger == ToolTrigger.CALL_END]
         for binding in bindings:
             tool = resolve_tool(binding.tool_class)
@@ -544,9 +397,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
         transcript_path = await save_transcript(session)
 
-        # Persist call record and analytics immediately so the DB reflects the
-        # completed state before we notify the client.  Summary/caller_name are
-        # filled in by the background task that runs after the WS closes.
         record = db_session.get(CallRecord, session.call_id)
         if record:
             record.state           = "done"
@@ -566,10 +416,6 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             "duration_sec": round(duration, 2),
         })
 
-        # Fire CALL_END tools in a background task — moves the Cerebras summary
-        # call (≈500 ms–2 s) and webhook dispatch off the call-end critical path.
-        # Tools run sequentially so SummarizationTool can write to ctx.shared
-        # before WebhookTool reads from it.
         call_end_ctx = _make_tool_ctx(
             transcript_path=transcript_path,
             duration_sec=duration,
@@ -587,8 +433,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     send_loop_task = asyncio.create_task(_send_loop())
     watchdog_task: asyncio.Task | None = None
     try:
-        stt_latency = await stt.start()
-        session.record_analytics("stt_session_open", "stt", stt_latency)
+        await transport.start()
 
         session.state_machine.transition(CallState.ACTIVE)
         record = db_session.get(CallRecord, session.call_id)
@@ -605,7 +450,7 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
             "persona_name": assistant_cfg.get("persona_name", "Assistant"),
         })
         await safe_send_text("server.response_text", {"text": greeting_text, "audio_id": "greet-001"})
-        await _send_tts(greeting_text, "greet-001")
+        await transport.send_response(greeting_text, "greet-001")
 
         # Opening — invoke data_collection with empty utterance to get first question
         loop = asyncio.get_running_loop()
@@ -617,9 +462,8 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
         session.add_assistant_turn(opening_text)
         transcript_turns.append({"role": "assistant", "content": opening_text})
         await safe_send_text("server.response_text", {"text": opening_text, "audio_id": "open-001"})
-        await _send_tts(opening_text, "open-001")
+        await transport.send_response(opening_text, "open-001")
 
-        # Max-duration watchdog
         max_duration = assistant_cfg.get("max_call_duration_sec", settings.max_call_duration_sec)
 
         async def watchdog() -> None:
@@ -638,47 +482,79 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
 
         watchdog_task = asyncio.create_task(watchdog())
 
-        # Read loop — timeout is the full max duration so the watchdog (not this
-        # timeout) is responsible for enforcing the call length limit.  A short
-        # timeout here was previously causing calls to drop mid-conversation
-        # whenever the client stopped sending audio frames (e.g. while TTS plays).
-        while not session.state_machine.is_terminal():
-            try:
-                message = await asyncio.wait_for(
-                    ws.receive(), timeout=max_duration
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Call %s terminated — reason: receive_loop_timeout "
-                    "(no WebSocket frame for %ds, call likely stalled or client disappeared)",
-                    session.call_id, max_duration,
-                )
-                break
+        # ── Concurrent read loop + utterance processor ────────────────────────
 
-            if "bytes" in message and message["bytes"]:
-                logger.debug("← [binary] %d bytes (audio)", len(message["bytes"]))
-                await stt.send_audio(message["bytes"])
-            elif "text" in message and message["text"]:
+        async def _ws_read_loop() -> str:
+            """Feed WebSocket frames to the transport. Returns the exit reason."""
+            while not session.state_machine.is_terminal():
                 try:
-                    msg = json.loads(message["text"])
-                    msg_type = msg.get("type", "")
-                    logger.debug("← %s", msg_type)
-                    if msg_type == "client.audio_end":
-                        await stt.finish_utterance()
-                    elif msg_type == "client.hangup":
-                        logger.info(
-                            "Call %s terminated — reason: client_hangup (caller ended the call at %.1fs)",
-                            session.call_id, session.duration_sec(),
-                        )
-                        break
-                    elif msg_type == "client.ready":
-                        logger.debug("Client ready signal received")
-                except json.JSONDecodeError:
-                    logger.warning("← unparseable text frame: %.80s", message["text"])
+                    message = await asyncio.wait_for(ws.receive(), timeout=max_duration)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Call %s terminated — reason: receive_loop_timeout "
+                        "(no WebSocket frame for %ds)",
+                        session.call_id, max_duration,
+                    )
+                    return "timeout"
+                except WebSocketDisconnect:
+                    logger.info(
+                        "Call %s terminated — reason: websocket_disconnect at %.1fs",
+                        session.call_id, session.duration_sec(),
+                    )
+                    return "disconnect"
+
+                if "bytes" in message and message["bytes"]:
+                    logger.debug("← [binary] %d bytes (audio)", len(message["bytes"]))
+                    await transport.handle_binary_frame(message["bytes"])
+                elif "text" in message and message["text"]:
+                    try:
+                        msg = json.loads(message["text"])
+                        logger.debug("← %s", msg.get("type", ""))
+                        if await transport.handle_text_frame(msg):
+                            logger.info(
+                                "Call %s terminated — reason: client_hangup at %.1fs",
+                                session.call_id, session.duration_sec(),
+                            )
+                            return "hangup"
+                    except json.JSONDecodeError:
+                        logger.warning("← unparseable text frame: %.80s", message["text"])
+            return "terminal"
+
+        async def _utterance_processor() -> None:
+            """Consume utterances from the transport queue one at a time."""
+            while not session.state_machine.is_terminal():
+                try:
+                    utterance = await asyncio.wait_for(
+                        transport.utterance_queue.get(), timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                async with utterance_lock:
+                    await _process_utterance(utterance)
+
+        ws_task = asyncio.create_task(_ws_read_loop())
+        proc_task = asyncio.create_task(_utterance_processor())
+
+        done, pending = await asyncio.wait(
+            [ws_task, proc_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # Propagate any unhandled exception from a completed task
+        for task in done:
+            exc = task.exception()
+            if exc:
+                raise exc
 
     except WebSocketDisconnect:
         logger.info(
-            "Call %s terminated — reason: websocket_disconnect (client disconnected at %.1fs)",
+            "Call %s terminated — reason: websocket_disconnect at %.1fs",
             session.call_id, session.duration_sec(),
         )
     except Exception as exc:
@@ -694,14 +570,13 @@ async def handle_call(ws: WebSocket, session: CallSession, db_session) -> None:
     finally:
         if watchdog_task:
             watchdog_task.cancel()
-        await stt.close()
+        await transport.close()
         if not session.state_machine.is_terminal():
             logger.warning(
-                "Call %s terminated — reason: abnormal_exit (session not terminal at %.1fs, finalizing now)",
+                "Call %s terminated — reason: abnormal_exit at %.1fs",
                 session.call_id, session.duration_sec(),
             )
             await _finalize_call("abnormal_exit")
-        # Drain the send queue (sentinel priority 2 runs after all pending frames)
         await _send_queue.put((2, next(_send_counter), None))
         try:
             await asyncio.wait_for(send_loop_task, timeout=5.0)
