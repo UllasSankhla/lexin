@@ -11,6 +11,7 @@ class AgentStatus(str, Enum):
     WAITING_CONFIRM = "waiting_confirm"
     COMPLETED = "completed"
     FAILED = "failed"
+    UNHANDLED = "unhandled"  # agent cannot process utterance — re-routes to decider
 
 
 @dataclass

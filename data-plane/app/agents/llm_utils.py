@@ -5,10 +5,14 @@ import json
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
 
 from cerebras.cloud.sdk import Cerebras
 from app.config import settings
 from app.pipeline.llm import _call_with_retry  # reuse retry logic
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +87,69 @@ def _try_repair_json(text: str) -> dict | None:
         v = {"true": True, "false": False, "null": None}[m.group(2)]
         result[m.group(1)] = v
     return result if result else None
+
+
+def llm_structured_call(
+    system_prompt: str,
+    user_message: str,
+    response_model: type,
+    max_tokens: int = 500,
+) -> object:
+    """
+    Single LLM call that returns a validated Pydantic model instance.
+    Uses response_format=json_object for structured output where supported,
+    then validates the result against the given Pydantic model.
+    Raises ValueError if parsing or validation fails.
+    """
+    t0 = time.monotonic()
+
+    try:
+        response = _call_with_retry(
+            _get_client(),
+            model=settings.cerebras_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+    except Exception:
+        # Cerebras may not support response_format on all models — retry without it
+        response = _call_with_retry(
+            _get_client(),
+            model=settings.cerebras_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.1,
+        )
+
+    latency_ms = (time.monotonic() - t0) * 1000
+    content = response.choices[0].message.content if response.choices else None
+    if not content:
+        raise ValueError("LLM returned empty content")
+
+    text = content.strip()
+    logger.debug("llm_structured_call latency=%.0fms response=%r", latency_ms, text[:300])
+
+    clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.DOTALL).strip()
+    try:
+        return response_model.model_validate_json(clean)
+    except Exception as exc:
+        repaired = _try_repair_json(clean)
+        if repaired:
+            try:
+                return response_model.model_validate(repaired)
+            except Exception:
+                pass
+        logger.error(
+            "llm_structured_call validation failed: %s | raw=%r", exc, text[:300]
+        )
+        raise ValueError(f"LLM structured response validation failed: {exc}") from exc
 
 
 def llm_text_call(

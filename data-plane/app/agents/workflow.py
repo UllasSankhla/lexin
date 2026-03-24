@@ -221,7 +221,18 @@ class WorkflowGraph:
 
     def update(self, agent_id: str, response: SubagentResponse, turn: int) -> None:
         state = self.states[agent_id]
-        state.status = response.status
+        if response.status == AgentStatus.UNHANDLED:
+            # UNHANDLED is an agent-level signal, not a durable graph state.
+            # Downgrade WAITING_CONFIRM → IN_PROGRESS so active_waiting_confirm()
+            # does not force-route back to this agent on the next router call,
+            # creating an infinite loop. internal_state (including any
+            # pending_confirmation) is always preserved so collection resumes
+            # correctly after the interrupt agent finishes.
+            if state.status == AgentStatus.WAITING_CONFIRM:
+                state.status = AgentStatus.IN_PROGRESS
+            # else leave existing status unchanged (was IN_PROGRESS or similar)
+        else:
+            state.status = response.status
         state.internal_state = response.internal_state
         state.last_response = response
         if response.speak:

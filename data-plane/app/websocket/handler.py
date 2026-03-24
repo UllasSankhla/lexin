@@ -252,6 +252,49 @@ async def handle_call(
         )
 
         graph.update(agent_id, response, current_turn)
+
+        # ── UNHANDLED: re-route this utterance to the appropriate agent ────────
+        # data_collection (or any agent) may return UNHANDLED when it cannot
+        # interpret the utterance (off-topic question, wants to cancel, noise).
+        # Rather than returning an empty speak or a generic recovery phrase,
+        # we re-ask the router so the correct interrupt agent (faq, fallback,
+        # etc.) can handle it. The interrupted agent's state is preserved in the
+        # graph and will be resumed via the resume stack when that agent finishes.
+        if response.status == AgentStatus.UNHANDLED:
+            reason = response.internal_state.get("cannot_process_reason", "unknown")
+            logger.info(
+                "Agent %s returned UNHANDLED (reason=%s) — re-routing utterance %r",
+                agent_id, reason, utterance[:60],
+            )
+            if chain_depth >= MAX_CHAIN:
+                logger.warning(
+                    "UNHANDLED re-route skipped — MAX_CHAIN (%d) reached at %s",
+                    MAX_CHAIN, agent_id,
+                )
+                return "", None
+
+            re_agent_id, _ = await loop.run_in_executor(
+                None,
+                lambda: router.select(
+                    utterance, recent_history,
+                    hint=f"data_collection_unhandled:{reason}",
+                ),
+            )
+
+            if re_agent_id == agent_id:
+                # Router still wants the same agent — avoid infinite loop
+                logger.warning(
+                    "Router re-selected %s after UNHANDLED — returning empty speak",
+                    agent_id,
+                )
+                return "", None
+
+            re_speak, finalize_reason = await _invoke_and_follow(
+                re_agent_id, utterance, current_turn, loop, recent_history, chain_depth + 1
+            )
+            return re_speak, finalize_reason
+        # ── End UNHANDLED handling ─────────────────────────────────────────────
+
         edge = graph.get_edge(agent_id, response.status)
 
         logger.info(

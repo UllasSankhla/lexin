@@ -13,7 +13,12 @@ class Router:
         self._graph = graph
         self._resume_stack: list[str] = []
 
-    def select(self, utterance: str, recent_history: list[dict]) -> tuple[str, bool]:
+    def select(
+        self,
+        utterance: str,
+        recent_history: list[dict],
+        hint: str | None = None,
+    ) -> tuple[str, bool]:
         """
         Return (agent_id, interrupt).
         Enforces WAITING_CONFIRM unconditionally before consulting the LLM.
@@ -40,12 +45,22 @@ class Router:
             f"  {t['role']}: {t['content'][:120]}" for t in recent_history[-8:]
         ) or "  (none)"
 
+        hint_block = (
+            f"\nCONTEXT HINT: {hint}\n"
+            "(The previous agent could not process this utterance and has deferred "
+            "to the router. Route to an interrupt-eligible agent if the caller is "
+            "asking a question or wants assistance; route back to the primary goal "
+            "agent only if the utterance is clearly an attempt to provide information.)\n"
+            if hint else ""
+        )
+
         user_msg = (
             f"MISSION:\n{workflow.goal.description}\n\n"
             f"RECENT CONVERSATION:\n{history_lines}\n\n"
             f"AGENT STATUS:\n{status_block}\n\n"
             f"AVAILABLE AGENTS:\n{available_block}\n\n"
-            f"CALLER JUST SAID: \"{utterance}\"\n\n"
+            f"CALLER JUST SAID: \"{utterance}\"\n"
+            f"{hint_block}\n"
             "Which agent should handle this? Reply JSON only."
         )
 
