@@ -28,9 +28,17 @@ _BUILTIN_PATTERNS = {
 # Operator-defined extraction_hints from the DB are appended after these.
 _DEFAULT_HINTS: dict[str, list[str]] = {
     "name": [
-        "Accept first and last name; the caller may pause briefly between them.",
-        "If only a first name is given, ask for the last name before moving on.",
-        "Confirm spelling if the name sounds hyphenated, unusual, or foreign.",
+        "Accept first and last name together; caller may provide them in one or two utterances.",
+        "SPELLED-OUT NAMES — convert character-by-character input to words:",
+        "  • Hyphenated: 'S-A-R-A-H' → 'Sarah' | 'M-I-T-C-H-E-L-L' → 'Mitchell'",
+        "  • Spaced letters: 'S A R A H' → 'Sarah'",
+        "  • NATO phonetic: 'sierra alpha romeo alpha hotel' → 'Sarah'",
+        "  • Mixed: 'J-O-H-N sierra echo alpha november' → 'John Sean'",
+        "If a NAME BUFFER is shown in the state section, the caller already gave a first name. "
+        "Combine the buffered first name with any last name in this utterance to form the full name. "
+        "Set pending_confirmation.value = '<buffered_first> <new_last>'.",
+        "Confirm spelling if the name sounds hyphenated, unusual, compound, or foreign.",
+        "Do NOT set pending_confirmation for a single-word name — Python will buffer it and ask for the last name.",
     ],
     "email": [
         "Spoken form: 'john at example dot com' → john@example.com",
@@ -90,10 +98,20 @@ def _build_mega_prompt(
     collected: dict,
     pending: dict | None,
     persona_name: str,
+    name_buffer: dict | None = None,
 ) -> str:
     fields_block = _build_fields_block(parameters)
     collected_json = json.dumps(collected, indent=2) if collected else "{}"
     pending_json = json.dumps(pending, indent=2) if pending else "none"
+
+    name_buffer_block = ""
+    if name_buffer:
+        name_buffer_block = (
+            f"\nNAME BUFFER (caller gave first name only in previous turn):\n"
+            f"  Field: {name_buffer['field']} | First name so far: {name_buffer['first_name']}\n"
+            f"  → Combine with the last name the caller provides now.\n"
+            f"    Set pending_confirmation.value = \"{name_buffer['first_name']} <last_name>\".\n"
+        )
 
     return f"""\
 You are an AI intake receptionist conducting a voice call on behalf of {persona_name}.
@@ -113,7 +131,7 @@ Already collected and confirmed:
 
 Awaiting caller's yes/no confirmation for:
 {pending_json}
-
+{name_buffer_block}
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 EXTRACTION RULES
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
@@ -253,11 +271,13 @@ class DataCollectionAgent(AgentBase):
             internal_state = {
                 "collected": {},
                 "pending_confirmation": None,
+                "name_buffer": None,
                 "retry_count": 0,
             }
 
         collected: dict = dict(internal_state.get("collected") or {})
         pending: dict | None = internal_state.get("pending_confirmation")
+        name_buffer: dict | None = internal_state.get("name_buffer")
 
         remaining = [p for p in parameters if p["name"] not in collected]
         if not remaining and not pending:
@@ -288,7 +308,7 @@ class DataCollectionAgent(AgentBase):
 
         # ── Mega-prompt LLM call ──────────────────────────────────────────────
         persona = config.get("assistant", {}).get("persona_name", "Assistant")
-        system = _build_mega_prompt(parameters, collected, pending, persona)
+        system = _build_mega_prompt(parameters, collected, pending, persona, name_buffer)
 
         try:
             result = llm_structured_call(
@@ -342,6 +362,11 @@ class DataCollectionAgent(AgentBase):
                 internal_state["collected"] = collected
                 internal_state["pending_confirmation"] = None
                 pending = None
+                # Clear name_buffer once the full name is confirmed
+                if internal_state.get("name_buffer", {}) and \
+                        internal_state["name_buffer"].get("field") == field_name:
+                    internal_state["name_buffer"] = None
+                    name_buffer = None
                 logger.info("DataCollection: confirmed %s = %r", field_name, confirmed_value)
 
             elif result.intent == "confirm_no":
@@ -407,6 +432,40 @@ class DataCollectionAgent(AgentBase):
                     logger.warning(
                         "DataCollection: LLM set pending for unknown field %r — ignoring",
                         pc.field,
+                    )
+
+        # ── Step C½: Single-word name buffer ─────────────────────────────────
+        # If the LLM set pending_confirmation for a name-type field with only a
+        # single word (first name only), buffer it and ask for the last name
+        # rather than confirming a possibly incomplete name.
+        # Also clear the buffer once we have a full multi-word name.
+        if new_pending and not validation_error_speak and name_buffer:
+            np_param = self._find_param(parameters, new_pending["field"])
+            if np_param and np_param.get("data_type") == "name" and \
+                    " " in new_pending["value"].strip():
+                # Full name resolved — clear the buffer
+                internal_state["name_buffer"] = None
+                name_buffer = None
+
+        if new_pending and not validation_error_speak and not name_buffer:
+            np_param = self._find_param(parameters, new_pending["field"])
+            if np_param and np_param.get("data_type") == "name":
+                first_only = new_pending["value"].strip()
+                if " " not in first_only:
+                    logger.info(
+                        "DataCollection: single-word name %r — buffering, asking for last name",
+                        first_only,
+                    )
+                    internal_state["name_buffer"] = {
+                        "field": new_pending["field"],
+                        "first_name": first_only,
+                    }
+                    internal_state["pending_confirmation"] = None
+                    internal_state["collected"] = collected
+                    return SubagentResponse(
+                        status=AgentStatus.IN_PROGRESS,
+                        speak=f"Thank you, {first_only}. And your last name, please?",
+                        internal_state=internal_state,
                     )
 
         internal_state["pending_confirmation"] = new_pending

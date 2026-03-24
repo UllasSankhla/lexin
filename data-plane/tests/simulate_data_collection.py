@@ -325,3 +325,52 @@ def test_sim_off_topic_then_resume():
             print("  ✓ UNHANDLED returned correctly")
         else:
             print(f"  ℹ  Agent kept going (status={resp_offto.status.value}) — LLM may have treated it as answerable")
+
+
+def test_sim_spelled_out_name():
+    """Caller spells their name letter-by-letter or via NATO phonetic alphabet."""
+    collected, statuses = run_conversation(
+        [
+            "N-A-T-H-A-N-I-E-L sierra echo alpha november",  # "Nathaniel Sean" spelled out
+            "yes",
+            "four one five five five five zero one nine two",
+            "yes",
+            "nathaniel at example dot com",
+            "yes",
+        ],
+        CONFIG_3,
+        label="Spelled-out name — N-A-T-H-A-N-I-E-L + NATO last name",
+        max_retries_on_waiting=3,
+    )
+    assert collected.get("full_name"), f"full_name missing: {collected}"
+    name = collected["full_name"]
+    assert any(part.lower() in name.lower() for part in ["nathaniel", "nathan"]), \
+        f"Name not decoded correctly: {name!r}"
+    assert AgentStatus.COMPLETED in statuses
+
+
+def test_sim_split_name_two_utterances():
+    """Caller says first name, pauses, then last name as separate STT finals.
+
+    The name_buffer mechanism should hold 'Sarah' after the first utterance and
+    combine it with 'Mitchell' from the second before confirming the full name.
+    """
+    collected, statuses = run_conversation(
+        [
+            "Sarah",          # first name only → expect buffer + "And your last name?"
+            "Mitchell",       # last name → expect "Sarah Mitchell, is that correct?"
+            "yes",            # confirm full name
+            "four one five five five five zero one nine two",
+            "yes",
+            "sarah at mitchell dot com",
+            "yes",
+        ],
+        CONFIG_3,
+        label="Split name — first name then last name as separate utterances",
+        max_retries_on_waiting=3,
+    )
+    assert collected.get("full_name"), f"full_name missing: {collected}"
+    name = collected["full_name"].lower()
+    assert "sarah" in name, f"Expected 'sarah' in full_name: {collected['full_name']!r}"
+    assert "mitchell" in name, f"Expected 'mitchell' in full_name: {collected['full_name']!r}"
+    assert AgentStatus.COMPLETED in statuses
