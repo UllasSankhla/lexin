@@ -295,7 +295,7 @@ class DataCollectionAgent(AgentBase):
                 system,
                 f'Caller said: "{utterance}"',
                 DataCollectionLLMResponse,
-                max_tokens=500,
+                max_tokens=800,
             )
         except Exception as exc:
             logger.warning("DataCollection mega-prompt call failed: %s", exc)

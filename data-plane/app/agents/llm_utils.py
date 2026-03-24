@@ -101,32 +101,21 @@ def llm_structured_call(
     then validates the result against the given Pydantic model.
     Raises ValueError if parsing or validation fails.
     """
+    # Note: response_format=json_object is intentionally NOT used here.
+    # Cerebras truncates or returns empty content when JSON mode is forced.
+    # The system prompt already instructs the model to return JSON only;
+    # Pydantic validates the result structurally.
     t0 = time.monotonic()
-
-    try:
-        response = _call_with_retry(
-            _get_client(),
-            model=settings.cerebras_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=max_tokens,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
-    except Exception:
-        # Cerebras may not support response_format on all models — retry without it
-        response = _call_with_retry(
-            _get_client(),
-            model=settings.cerebras_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=max_tokens,
-            temperature=0.1,
-        )
+    response = _call_with_retry(
+        _get_client(),
+        model=settings.cerebras_model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        max_tokens=max_tokens,
+        temperature=0.1,
+    )
 
     latency_ms = (time.monotonic() - t0) * 1000
     content = response.choices[0].message.content if response.choices else None
