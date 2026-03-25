@@ -34,11 +34,7 @@ _DEFAULT_HINTS: dict[str, list[str]] = {
         "  • Spaced letters: 'S A R A H' → 'Sarah'",
         "  • NATO phonetic: 'sierra alpha romeo alpha hotel' → 'Sarah'",
         "  • Mixed: 'J-O-H-N sierra echo alpha november' → 'John Sean'",
-        "If a NAME BUFFER is shown in the state section, the caller already gave a first name. "
-        "Combine the buffered first name with any last name in this utterance to form the full name. "
-        "Set pending_confirmation.value = '<buffered_first> <new_last>'.",
         "Confirm spelling if the name sounds hyphenated, unusual, compound, or foreign.",
-        "Do NOT set pending_confirmation for a single-word name — Python will buffer it and ask for the last name.",
     ],
     "email": [
         "Spoken form: 'john at example dot com' → john@example.com",
@@ -98,20 +94,10 @@ def _build_mega_prompt(
     collected: dict,
     pending: dict | None,
     persona_name: str,
-    name_buffer: dict | None = None,
 ) -> str:
     fields_block = _build_fields_block(parameters)
     collected_json = json.dumps(collected, indent=2) if collected else "{}"
     pending_json = json.dumps(pending, indent=2) if pending else "none"
-
-    name_buffer_block = ""
-    if name_buffer:
-        name_buffer_block = (
-            f"\nNAME BUFFER (caller gave first name only in previous turn):\n"
-            f"  Field: {name_buffer['field']} | First name so far: {name_buffer['first_name']}\n"
-            f"  → Combine with the last name the caller provides now.\n"
-            f"    Set pending_confirmation.value = \"{name_buffer['first_name']} <last_name>\".\n"
-        )
 
     return f"""\
 You are an AI intake receptionist conducting a voice call on behalf of {persona_name}.
@@ -131,7 +117,7 @@ Already collected and confirmed:
 
 Awaiting caller's yes/no confirmation for:
 {pending_json}
-{name_buffer_block}
+
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 EXTRACTION RULES
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
@@ -150,6 +136,10 @@ EXTRACTION RULES
    "no it's...", or "make that..." treat the new value as a correction
    for the field currently pending confirmation, or the most recently
    discussed field.
+   A correction utterance may also contain values for OTHER fields — apply
+   Rule 2 (multiple fields at once) even during a correction. Put the
+   corrected field in pending_confirmation; put other extracted values in
+   the extracted dict.
 
 5. INCOMPLETE UTTERANCE: If the caller's speech seems cut off mid-sentence
    (e.g. ends on "my email is..." with no address following), do not guess.
@@ -258,6 +248,7 @@ class DataCollectionAgent(AgentBase):
     Internal state keys:
       collected:            dict[str, str]  — confirmed field values
       pending_confirmation: dict | None     — {field, value} awaiting yes/no
+      extraction_queue:     list[dict]      — extracted values awaiting confirmation
       retry_count:          int             — consecutive LLM call failures
     """
 
@@ -282,13 +273,12 @@ class DataCollectionAgent(AgentBase):
             internal_state = {
                 "collected": {},
                 "pending_confirmation": None,
-                "name_buffer": None,
+                "extraction_queue": [],
                 "retry_count": 0,
             }
 
         collected: dict = dict(internal_state.get("collected") or {})
         pending: dict | None = internal_state.get("pending_confirmation")
-        name_buffer: dict | None = internal_state.get("name_buffer")
 
         remaining = [p for p in parameters if p["name"] not in collected]
         if not remaining and not pending:
@@ -319,7 +309,7 @@ class DataCollectionAgent(AgentBase):
 
         # ── Mega-prompt LLM call ──────────────────────────────────────────────
         persona = config.get("assistant", {}).get("persona_name", "Assistant")
-        system = _build_mega_prompt(parameters, collected, pending, persona, name_buffer)
+        system = _build_mega_prompt(parameters, collected, pending, persona)
 
         try:
             result = llm_structured_call(
@@ -373,11 +363,6 @@ class DataCollectionAgent(AgentBase):
                 internal_state["collected"] = collected
                 internal_state["pending_confirmation"] = None
                 pending = None
-                # Clear name_buffer once the full name is confirmed
-                if internal_state.get("name_buffer", {}) and \
-                        internal_state["name_buffer"].get("field") == field_name:
-                    internal_state["name_buffer"] = None
-                    name_buffer = None
                 logger.info("DataCollection: confirmed %s = %r", field_name, confirmed_value)
 
             elif result.intent == "confirm_no":
@@ -410,16 +395,31 @@ class DataCollectionAgent(AgentBase):
                     )
                     # The corrected value flows through Step C via result.pending_confirmation
 
-        # ── Step B: Handle skipped optional fields ────────────────────────────
+        # ── Step B: Handle extracted values ───────────────────────────────────
+        # Non-empty values that aren't the immediate pending_confirmation are
+        # queued so they survive across turns (multi-field utterance support).
+        pending_field_from_llm = (
+            result.pending_confirmation.field if result.pending_confirmation else None
+        )
+        queue: list[dict] = list(internal_state.get("extraction_queue") or [])
+        queued_fields = {q["field"] for q in queue}
+
         for field_name, value in result.extracted.items():
             if field_name in collected:
                 continue
             if value == "":
+                # Skip — record empty for optional fields
                 param = self._find_param(parameters, field_name)
                 if param and not param.get("required", True):
                     collected[field_name] = ""
                     internal_state["collected"] = collected
                     logger.info("DataCollection: optional field %r skipped by caller", field_name)
+            elif field_name != pending_field_from_llm and field_name not in queued_fields:
+                queue.append({"field": field_name, "value": value})
+                queued_fields.add(field_name)
+                logger.info("DataCollection: queued extracted field %r = %r", field_name, value)
+
+        internal_state["extraction_queue"] = queue
 
         # ── Step C: Validate new pending_confirmation from LLM ────────────────
         new_pending: dict | None = None
@@ -427,12 +427,23 @@ class DataCollectionAgent(AgentBase):
 
         if result.pending_confirmation:
             pc = result.pending_confirmation
-            if pc.field not in collected:
+            # Allow re-confirmation when correcting an already-confirmed field
+            is_correction_of_confirmed = (
+                result.intent == "correction" and pc.field in collected
+            )
+            if pc.field not in collected or is_correction_of_confirmed:
                 param = self._find_param(parameters, pc.field)
                 if param:
                     is_valid, msg_or_val = self._validate(param, pc.value)
                     if is_valid:
                         new_pending = {"field": pc.field, "value": msg_or_val}
+                        if is_correction_of_confirmed:
+                            del collected[pc.field]
+                            internal_state["collected"] = collected
+                            logger.info(
+                                "DataCollection: re-opening confirmed field %r for correction → %r",
+                                pc.field, msg_or_val,
+                            )
                     else:
                         validation_error_speak = f"{msg_or_val} Could you try again?"
                         logger.info(
@@ -445,39 +456,36 @@ class DataCollectionAgent(AgentBase):
                         pc.field,
                     )
 
-        # ── Step C½: Single-word name buffer ─────────────────────────────────
-        # If the LLM set pending_confirmation for a name-type field with only a
-        # single word (first name only), buffer it and ask for the last name
-        # rather than confirming a possibly incomplete name.
-        # Also clear the buffer once we have a full multi-word name.
-        if new_pending and not validation_error_speak and name_buffer:
-            np_param = self._find_param(parameters, new_pending["field"])
-            if np_param and np_param.get("data_type") == "name" and \
-                    " " in new_pending["value"].strip():
-                # Full name resolved — clear the buffer
-                internal_state["name_buffer"] = None
-                name_buffer = None
-
-        if new_pending and not validation_error_speak and not name_buffer:
-            np_param = self._find_param(parameters, new_pending["field"])
-            if np_param and np_param.get("data_type") == "name":
-                first_only = new_pending["value"].strip()
-                if " " not in first_only:
+        # ── Step C¾: Pop from extraction queue if no pending ─────────────────
+        # When the LLM returns no new pending_confirmation (e.g. after a "yes"
+        # confirmation), promote the next queued extracted value so the caller
+        # doesn't have to repeat information they already provided.
+        queue_speak: str | None = None
+        if not new_pending and not validation_error_speak:
+            queue = list(internal_state.get("extraction_queue") or [])
+            while queue:
+                queued = queue.pop(0)
+                fn = queued["field"]
+                if fn in collected:
+                    continue  # already confirmed since it was queued
+                param = self._find_param(parameters, fn)
+                if not param:
+                    continue
+                is_valid, msg_or_val = self._validate(param, queued["value"])
+                if is_valid:
+                    new_pending = {"field": fn, "value": msg_or_val}
+                    queue_speak = self._rephrase_confirmation(new_pending, parameters)
                     logger.info(
-                        "DataCollection: single-word name %r — buffering, asking for last name",
-                        first_only,
+                        "DataCollection: dequeued field %r = %r for confirmation",
+                        fn, msg_or_val,
                     )
-                    internal_state["name_buffer"] = {
-                        "field": new_pending["field"],
-                        "first_name": first_only,
-                    }
-                    internal_state["pending_confirmation"] = None
-                    internal_state["collected"] = collected
-                    return SubagentResponse(
-                        status=AgentStatus.IN_PROGRESS,
-                        speak=f"Thank you, {first_only}. And your last name, please?",
-                        internal_state=internal_state,
+                    break
+                else:
+                    logger.info(
+                        "DataCollection: dropped invalid queued value for %r — will re-ask",
+                        fn,
                     )
+            internal_state["extraction_queue"] = queue
 
         internal_state["pending_confirmation"] = new_pending
         internal_state["collected"] = collected
@@ -496,7 +504,9 @@ class DataCollectionAgent(AgentBase):
             )
 
         # ── Step E: Return ────────────────────────────────────────────────────
-        speak = validation_error_speak or result.speak or "Could you please continue?"
+        # queue_speak takes priority when we dequeued a value — it's a precise
+        # readback. validation_error_speak takes priority over everything else.
+        speak = validation_error_speak or queue_speak or result.speak or "Could you please continue?"
 
         if new_pending and not validation_error_speak:
             status = AgentStatus.WAITING_CONFIRM

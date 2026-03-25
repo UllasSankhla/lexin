@@ -384,6 +384,64 @@ def test_sim_vishwas_babu_transcript():
     assert AgentStatus.COMPLETED in statuses, "Never reached COMPLETED"
 
 
+def test_sim_mid_collection_question():
+    """Caller asks a clarifying question mid-collection: 'Do you need my email address to continue?'
+
+    Expected behaviour:
+    - Agent returns UNHANDLED (it's a question, not field data).
+    - speak is empty on UNHANDLED.
+    - pending_confirmation is preserved if one was in flight.
+    - Collection resumes correctly on the next substantive utterance.
+    """
+    agent = DataCollectionAgent()
+    state: dict = {}
+    config = CONFIG_3
+
+    print(f"\n{'=' * 60}")
+    print("SIM: Mid-collection clarifying question → UNHANDLED")
+    print(f"{'=' * 60}")
+
+    # Opening
+    resp = agent.process("", state, config, [])
+    state = resp.internal_state
+    print(f"[open] AI: {resp.speak}")
+
+    # T1 — give name, get to WAITING_CONFIRM
+    resp = agent.process("Sarah Mitchell", state, config, [])
+    state = resp.internal_state
+    print(f"[T1] Caller: 'Sarah Mitchell'")
+    print(f"     AI: {resp.speak!r}  status={resp.status.value}  pending={state.get('pending_confirmation')}")
+
+    pending_before = state.get("pending_confirmation")
+
+    # T2 — ask clarifying question instead of yes/no
+    resp = agent.process("Do you need my email address to continue?", state, config, [])
+    state = resp.internal_state
+    print(f"[T2] Caller: 'Do you need my email address to continue?'")
+    print(f"     AI: {resp.speak!r}  status={resp.status.value}  pending={state.get('pending_confirmation')}")
+
+    assert resp.status == AgentStatus.UNHANDLED, (
+        f"Expected UNHANDLED for clarifying question, got {resp.status.value}"
+    )
+    assert resp.speak == "", f"speak must be empty on UNHANDLED, got {resp.speak!r}"
+    assert state.get("pending_confirmation") == pending_before, (
+        f"pending_confirmation must be preserved on UNHANDLED. "
+        f"before={pending_before}  after={state.get('pending_confirmation')}"
+    )
+    print("  ✓ UNHANDLED returned, speak empty, pending preserved")
+
+    # T3 — caller resumes with yes/no — collection should continue
+    resp = agent.process("Yes", state, config, [])
+    state = resp.internal_state
+    print(f"[T3] Caller: 'Yes'  (resuming after question)")
+    print(f"     AI: {resp.speak!r}  status={resp.status.value}  collected={state.get('collected', {})}")
+
+    assert state.get("collected", {}).get("full_name"), (
+        f"full_name should be confirmed after 'Yes', collected={state.get('collected')}"
+    )
+    print("  ✓ Collection resumed correctly after UNHANDLED")
+
+
 def test_sim_spelled_out_name():
     """Caller spells their name letter-by-letter or via NATO phonetic alphabet."""
     collected, statuses = run_conversation(
@@ -406,28 +464,167 @@ def test_sim_spelled_out_name():
     assert AgentStatus.COMPLETED in statuses
 
 
-def test_sim_split_name_two_utterances():
-    """Caller says first name, pauses, then last name as separate STT finals.
+def test_sim_dense_single_utterance():
+    """Caller provides all three fields in one breath.
 
-    The name_buffer mechanism should hold 'Sarah' after the first utterance and
-    combine it with 'Mitchell' from the second before confirming the full name.
+    E.g.: "I'm Jane Doe, my number is 415-555-0100, email is jane at example dot com."
+    The agent should extract all three, confirm them one at a time, and complete.
+    Verifies MULTIPLE FIELDS AT ONCE extraction.
     """
     collected, statuses = run_conversation(
         [
-            "Sarah",          # first name only → expect buffer + "And your last name?"
-            "Mitchell",       # last name → expect "Sarah Mitchell, is that correct?"
-            "yes",            # confirm full name
-            "four one five five five five zero one nine two",
-            "yes",
-            "sarah at mitchell dot com",
-            "yes",
+            # All three values in one shot
+            "I'm Jane Doe, my number is 415-555-0100, and my email is jane at example dot com",
+            "yes",   # confirm whichever field was picked up first
+            "yes",   # confirm second
+            "yes",   # confirm third (may already be done after two)
         ],
         CONFIG_3,
-        label="Split name — first name then last name as separate utterances",
-        max_retries_on_waiting=3,
+        label="Dense single utterance — all 3 fields at once",
+        max_retries_on_waiting=4,
     )
-    assert collected.get("full_name"), f"full_name missing: {collected}"
-    name = collected["full_name"].lower()
-    assert "sarah" in name, f"Expected 'sarah' in full_name: {collected['full_name']!r}"
-    assert "mitchell" in name, f"Expected 'mitchell' in full_name: {collected['full_name']!r}"
+    assert collected.get("full_name"),    f"full_name missing:    {collected}"
+    assert collected.get("phone_number"), f"phone_number missing: {collected}"
+    assert collected.get("email_address"),f"email_address missing:{collected}"
     assert AgentStatus.COMPLETED in statuses
+
+
+def test_sim_correction_plus_new_field_same_turn():
+    """While WAITING_CONFIRM for name, caller corrects it AND provides phone.
+
+    Caller flow:
+      T1: "John Doe"           → AI reads back "John Doe, is that correct?"
+      T2: "Actually it's Jane Doe, and my number is 415-555-9999"
+                               → correction applied + phone queued for next confirm
+      T3: "yes"                → confirm phone (or corrected name)
+      ...
+    Verifies CORRECTION intent + simultaneous new-field extraction.
+    """
+    agent = DataCollectionAgent()
+    state: dict = {}
+    config = CONFIG_3
+
+    print(f"\n{'=' * 60}")
+    print("SIM: Correction + new field in same utterance")
+    print(f"{'=' * 60}")
+
+    resp = agent.process("", state, config, [])
+    state = resp.internal_state
+    print(f"[open] AI: {resp.speak}")
+
+    # T1 — give name, reach WAITING_CONFIRM
+    resp = agent.process("John Doe", state, config, [])
+    state = resp.internal_state
+    print(f"[T1] Caller: 'John Doe'")
+    print(f"     AI: {resp.speak!r}  status={resp.status.value}")
+
+    # T2 — correction + new field
+    resp = agent.process(
+        "Actually it's Jane Doe, and my number is 415-555-9999",
+        state, config, [],
+    )
+    state = resp.internal_state
+    print(f"[T2] Caller: 'Actually it's Jane Doe, and my number is 415-555-9999'")
+    print(f"     AI: {resp.speak!r}  status={resp.status.value}  pending={state.get('pending_confirmation')}  collected={state.get('collected', {})}")
+
+    # Name must now reflect the correction (either pending Jane Doe or confirmed Jane Doe)
+    pending = state.get("pending_confirmation")
+    collected_so_far = state.get("collected", {})
+    name_in_flight = (
+        (pending or {}).get("value", "").lower() if pending and pending.get("field") == "full_name"
+        else collected_so_far.get("full_name", "").lower()
+    )
+    assert "jane" in name_in_flight, (
+        f"Correction not applied — expected 'jane' in name, "
+        f"pending={pending}, collected={collected_so_far}"
+    )
+    print(f"  ✓ Correction applied: name in flight = {name_in_flight!r}")
+
+    # Drive to completion
+    for i, utt in enumerate(["yes", "yes", "jane at example dot com", "yes"], start=3):
+        if resp.status == AgentStatus.COMPLETED:
+            break
+        resp = agent.process(utt, state, config, [])
+        state = resp.internal_state
+        print(f"[T{i}] Caller: {utt!r}  AI: {resp.speak!r}  status={resp.status.value}  collected={state.get('collected', {})}")
+
+    final = state.get("collected", {}) or (resp.collected or {})
+    assert final.get("full_name"),    f"full_name missing:    {final}"
+    assert final.get("phone_number"), f"phone_number missing: {final}"
+    assert AgentStatus.COMPLETED in [resp.status] or final.get("email_address"), (
+        f"Did not complete: {final}"
+    )
+
+
+def test_sim_correction_of_confirmed_field():
+    """Caller corrects a field that was already confirmed.
+
+    Flow:
+      T1: "John Doe"     → WAITING_CONFIRM
+      T2: "yes"          → full_name confirmed as "John Doe"
+      T3: "Wait, I made a mistake — my name is actually Jane Doe"
+                         → should update full_name to "Jane Doe"
+      T4+: normal collection continues
+
+    This surfaces whether the agent can revise an already-confirmed field.
+    """
+    agent = DataCollectionAgent()
+    state: dict = {}
+    config = CONFIG_3
+
+    print(f"\n{'=' * 60}")
+    print("SIM: Correction of already-confirmed field")
+    print(f"{'=' * 60}")
+
+    resp = agent.process("", state, config, [])
+    state = resp.internal_state
+    print(f"[open] AI: {resp.speak}")
+
+    # T1 — give name
+    resp = agent.process("John Doe", state, config, [])
+    state = resp.internal_state
+    print(f"[T1] Caller: 'John Doe'  AI: {resp.speak!r}  status={resp.status.value}")
+
+    # T2 — confirm it
+    resp = agent.process("yes", state, config, [])
+    state = resp.internal_state
+    print(f"[T2] Caller: 'yes'  AI: {resp.speak!r}  status={resp.status.value}  collected={state.get('collected', {})}")
+    assert state.get("collected", {}).get("full_name"), "full_name should be confirmed after 'yes'"
+    print(f"  ✓ full_name confirmed as {state['collected']['full_name']!r}")
+
+    # T3 — caller corrects the already-confirmed name
+    resp = agent.process(
+        "Wait, I made a mistake — my name is actually Jane Doe not John",
+        state, config, [],
+    )
+    state = resp.internal_state
+    print(f"[T3] Caller: 'Wait, my name is actually Jane Doe not John'")
+    print(f"     AI: {resp.speak!r}  status={resp.status.value}  pending={state.get('pending_confirmation')}  collected={state.get('collected', {})}")
+
+    pending = state.get("pending_confirmation")
+    collected_so_far = state.get("collected", {})
+    # The corrected name should either be re-pending or already updated in collected
+    name_value = (
+        (pending or {}).get("value", "").lower() if pending and pending.get("field") == "full_name"
+        else collected_so_far.get("full_name", "").lower()
+    )
+    corrected = "jane" in name_value
+    print(f"  {'✓' if corrected else '✗'} name after correction: {name_value!r}")
+    assert corrected, (
+        f"Correction of confirmed field not applied — expected 'jane' in name, "
+        f"pending={pending}, collected={collected_so_far}"
+    )
+
+    # Drive to completion regardless
+    for i, utt in enumerate(["yes", "four one five five five five zero one nine two", "yes", "jane at example dot com", "yes"], start=4):
+        if resp.status == AgentStatus.COMPLETED:
+            break
+        resp = agent.process(utt, state, config, [])
+        state = resp.internal_state
+        print(f"[T{i}] Caller: {utt!r}  AI: {resp.speak!r}  status={resp.status.value}  collected={state.get('collected', {})}")
+
+    final = state.get("collected", {}) or (resp.collected or {})
+    print(f"Final collected: {final}")
+    assert AgentStatus.COMPLETED in [resp.status] or all(
+        final.get(k) for k in ("full_name", "phone_number", "email_address")
+    ), f"Did not complete cleanly: {final}"
