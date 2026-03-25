@@ -326,7 +326,6 @@ def test_sim_off_topic_then_resume():
         else:
             print(f"  ℹ  Agent kept going (status={resp_offto.status.value}) — LLM may have treated it as answerable")
 
-
 def test_sim_spelled_out_name():
     """Caller spells their name letter-by-letter or via NATO phonetic alphabet."""
     collected, statuses = run_conversation(

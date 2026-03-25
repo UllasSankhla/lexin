@@ -177,6 +177,17 @@ Voice-friendly read-back formats:
 
 Always end the confirmation question with: "Is that correct?"
 
+After a confirmation is resolved (yes/no/correction), if there are still
+uncollected fields, your speak MUST seamlessly continue to the next field
+in the same sentence. Never end a turn with a bare acknowledgment when
+work remains.
+
+  GOOD: "Got it, Sarah Mitchell. What's the best number to reach you?"
+  BAD:  "Thank you." — leaves the caller with nothing to do
+
+The speak for a resolved confirmation is always:
+  <brief acknowledgment> + <question for next uncollected field>
+
 If "Awaiting caller's yes/no confirmation for" above is not "none", interpret
 this utterance as a yes/no FIRST before attempting any field extraction:
 - YES signals: "yes", "yep", "correct", "that's right", "uh huh", "sure",
@@ -315,7 +326,7 @@ class DataCollectionAgent(AgentBase):
                 system,
                 f'Caller said: "{utterance}"',
                 DataCollectionLLMResponse,
-                max_tokens=800,
+                max_tokens=2048,
             )
         except Exception as exc:
             logger.warning("DataCollection mega-prompt call failed: %s", exc)
