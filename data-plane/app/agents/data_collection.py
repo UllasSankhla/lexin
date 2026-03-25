@@ -472,10 +472,10 @@ class DataCollectionAgent(AgentBase):
         internal_state["collected"] = collected
 
         # ── Step D: Check completion ──────────────────────────────────────────
-        remaining2 = [p for p in parameters if p["name"] not in collected]
-        required_remaining = [p for p in remaining2 if p.get("required", True)]
+        remaining_all = [p for p in parameters if p["name"] not in collected]
+        required_remaining = [p for p in remaining_all if p.get("required", True)]
 
-        if not required_remaining and not new_pending:
+        if not remaining_all and not new_pending:
             speak = result.speak or "Perfect, I have all the information I need."
             return SubagentResponse(
                 status=AgentStatus.COMPLETED,
