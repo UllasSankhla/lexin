@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     deepgram_eot_hold_ms: int = 500   # extra hold after EndOfTurn before firing on_final
 
     cerebras_api_key: str = ""
-    cerebras_model: str = "llama-4-scout-17b-16e-instruct"
+    cerebras_model: str = "qwen-3-235b-a22b-instruct-2507"
     cerebras_max_tokens: int = 512
     cerebras_temperature: float = 0.4
 

@@ -326,6 +326,64 @@ def test_sim_off_topic_then_resume():
         else:
             print(f"  ℹ  Agent kept going (status={resp_offto.status.value}) — LLM may have treated it as answerable")
 
+CONFIG_4_FIELD = {
+    "assistant": {"persona_name": "Aria"},
+    "parameters": [
+        {"name": "first_name",     "display_label": "First Name",     "data_type": "name",  "required": True,  "extraction_hints": []},
+        {"name": "last_name",      "display_label": "Last Name",      "data_type": "name",  "required": True,  "extraction_hints": []},
+        {"name": "email_address",  "display_label": "Email Address",  "data_type": "email", "required": True,  "extraction_hints": []},
+        {"name": "phone_number",   "display_label": "Contact Number", "data_type": "phone", "required": True,  "extraction_hints": []},
+    ],
+}
+
+
+def test_sim_vishwas_babu_transcript():
+    """Replay the real Vishwas Babu call transcript verbatim.
+
+    Caller utterances extracted exactly from the recorded conversation,
+    in order.  The test asserts all four fields are ultimately collected
+    and that the agent reaches COMPLETED despite off-topic tangents,
+    corrections, interruptions, and a mis-heard first name.
+    """
+    collected, statuses = run_conversation(
+        [
+            "Hello.",
+            "Can you",
+            "search by my last name. Maybe that's easier.",
+            "Yes.",
+            "My full name is Vishwas Babu. My first name is Vishwas.",
+            "It's not wish wash.",
+            "Yes, sir. So that was my son talking in the background. My first name is Vishwas.",
+            "And my last name is Babu.",
+            "Yes.",
+            "Okay. Can you continue with the other questions you have?",
+            "Do you have any other questions to ask?",
+            "Bubbles.",
+            "Uh, no. It's babu, uh, b as in ball, a as in Africa, b as in ball, and u as in underwear.",
+            "Yes.",
+            "Okay. What next?",
+            "What is your",
+            "Yes.",
+            "vishwas babu at the rate of gmail dot com",
+            "So my first name, my last name at the rate of g mail dot com.",
+            "Yes.",
+            "I would rather",
+            "Are you listening?",
+            "Hello?",
+            "Yes. Two zero two seven one six six six seven five.",
+            "Yes.",
+        ],
+        CONFIG_4_FIELD,
+        label="Vishwas Babu — real transcript replay",
+        max_retries_on_waiting=6,
+    )
+    assert collected.get("first_name"),    f"first_name missing:    {collected}"
+    assert collected.get("last_name"),     f"last_name missing:     {collected}"
+    assert collected.get("email_address"), f"email_address missing: {collected}"
+    assert collected.get("phone_number"),  f"phone_number missing:  {collected}"
+    assert AgentStatus.COMPLETED in statuses, "Never reached COMPLETED"
+
+
 def test_sim_spelled_out_name():
     """Caller spells their name letter-by-letter or via NATO phonetic alphabet."""
     collected, statuses = run_conversation(
