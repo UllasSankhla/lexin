@@ -175,11 +175,6 @@ class IntakeQualificationAgent(AgentBase):
             return self._respond_from_state(internal_state, config)
 
         # ── Gather inputs ────────────────────────────────────────────────────
-        # full_narrative is stored in hidden_collected by NarrativeCollectionAgent
-        # and lands in config["_collected"] via _persist_response in the handler.
-        collected: dict = config.get("_collected", {})
-        full_narrative = collected.get("full_narrative", "")
-
         practice_areas: list = config.get("practice_areas", [])
         global_policy_docs: list = config.get("global_policy_documents", [])
 
@@ -198,8 +193,7 @@ class IntakeQualificationAgent(AgentBase):
         user_message = (
             f"{areas_block}"
             f"{global_block}\n\n"
-            f"FULL CONVERSATION TRANSCRIPT:\n{transcript_block}\n\n"
-            f"CALLER'S FULL NARRATIVE:\n{full_narrative or '(not captured)'}"
+            f"FULL CONVERSATION TRANSCRIPT:\n{transcript_block}"
         )
 
         # ── LLM qualification call ───────────────────────────────────────────
