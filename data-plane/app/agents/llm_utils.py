@@ -26,10 +26,80 @@ def _get_client() -> Cerebras:
     return _client
 
 
+# ── Conversation history ──────────────────────────────────────────────────────
+
+class ConversationHistory:
+    """
+    Per-agent multi-turn message history for LLM calls.
+
+    Stored in internal_state["llm_history"] as a plain list of dicts so it
+    survives serialisation between turns.  Reconstruct with from_list() at the
+    start of each process() call; call to_list() to persist it back.
+
+    Usage pattern in an agent:
+        history = ConversationHistory.from_list(internal_state.get("llm_history"))
+        result  = llm_structured_call(system, user_msg, Model, history=history)
+        history.add("user", user_msg)
+        history.add("assistant", result.speak or "")
+        internal_state["llm_history"] = history.to_list()
+    """
+
+    # Keep at most this many (user + assistant) pairs to bound token usage.
+    _MAX_PAIRS = 10
+
+    def __init__(self, messages: list[dict] | None = None) -> None:
+        self._messages: list[dict] = list(messages or [])
+
+    # ── Mutation ──────────────────────────────────────────────────────────────
+
+    def add(self, role: str, content: str) -> None:
+        """Append a single message and trim to _MAX_PAIRS pairs if needed."""
+        self._messages.append({"role": role, "content": content})
+        # Each pair = 2 messages; trim from the front
+        max_msgs = self._MAX_PAIRS * 2
+        if len(self._messages) > max_msgs:
+            self._messages = self._messages[-max_msgs:]
+
+    # ── Serialisation ─────────────────────────────────────────────────────────
+
+    def to_list(self) -> list[dict]:
+        """Return a serialisable copy for storage in internal_state."""
+        return list(self._messages)
+
+    @classmethod
+    def from_list(cls, data: list[dict] | None) -> "ConversationHistory":
+        return cls(data or [])
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def messages(self) -> list[dict]:
+        """Return a copy of the stored messages."""
+        return list(self._messages)
+
+    def __len__(self) -> int:
+        return len(self._messages)
+
+
+# ── LLM call helpers ──────────────────────────────────────────────────────────
+
+def _build_messages(
+    system_prompt: str,
+    user_message: str,
+    history: ConversationHistory | None,
+) -> list[dict]:
+    """Assemble the messages list: system → history turns → current user turn."""
+    msgs: list[dict] = [{"role": "system", "content": system_prompt}]
+    if history:
+        msgs.extend(history.messages())
+    msgs.append({"role": "user", "content": user_message})
+    return msgs
+
+
 def llm_json_call(
     system_prompt: str,
     user_message: str,
     max_tokens: int = 1024,
+    history: ConversationHistory | None = None,
 ) -> dict:
     """
     Single LLM call that returns a parsed JSON dict.
@@ -40,10 +110,7 @@ def llm_json_call(
     response = _call_with_retry(
         _get_client(),
         model=settings.cerebras_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        messages=_build_messages(system_prompt, user_message, history),
         max_tokens=max_tokens,
         temperature=0.2,
     )
@@ -94,6 +161,7 @@ def llm_structured_call(
     user_message: str,
     response_model: type,
     max_tokens: int = 1024,
+    history: ConversationHistory | None = None,
 ) -> object:
     """
     Single LLM call that returns a validated Pydantic model instance.
@@ -109,10 +177,7 @@ def llm_structured_call(
     response = _call_with_retry(
         _get_client(),
         model=settings.cerebras_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        messages=_build_messages(system_prompt, user_message, history),
         max_tokens=max_tokens,
         temperature=0.1,
     )
@@ -145,16 +210,14 @@ def llm_text_call(
     system_prompt: str,
     user_message: str,
     max_tokens: int = 1024,
+    history: ConversationHistory | None = None,
 ) -> str:
     """Single LLM call returning plain text. Used for speak generation."""
     t0 = time.monotonic()
     response = _call_with_retry(
         _get_client(),
         model=settings.cerebras_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        messages=_build_messages(system_prompt, user_message, history),
         max_tokens=max_tokens,
         temperature=0.3,
     )

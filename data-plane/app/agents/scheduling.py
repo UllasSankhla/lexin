@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call
+from app.agents.llm_utils import llm_json_call, llm_text_call, ConversationHistory
 from app.services.calendar_service import list_available_slots, book_time_slot
 
 logger = logging.getLogger(__name__)
@@ -161,15 +161,18 @@ class SchedulingAgent(AgentBase):
 
     def _handle_choice(self, utterance: str, internal_state: dict, config: dict) -> SubagentResponse:
         slots_data = internal_state.get("available_slots", [])
+        llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
         if slots_data:
             # Numbered list used internally only for LLM choice identification — never spoken to caller
             numbered = "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
+            user_msg = f"Available slots:\n{numbered}\nCaller said: \"{utterance}\""
             try:
                 result = llm_json_call(
                     "Identify which slot the caller chose based on their description. "
                     "Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
-                    f"Available slots:\n{numbered}\nCaller said: \"{utterance}\"",
+                    user_msg,
+                    history=llm_history,
                 )
                 slot_num = result.get("slot")
                 if slot_num is not None:
@@ -182,7 +185,11 @@ class SchedulingAgent(AgentBase):
                         speak = llm_text_call(
                             "Generate a single voice sentence confirming a chosen appointment slot and asking for final confirmation.",
                             f"Slot: {chosen['description']}\nPattern: 'I'll book you for [slot]. Shall I confirm?'",
+                            history=llm_history,
                         )
+                        llm_history.add("user", user_msg)
+                        llm_history.add("assistant", speak)
+                        internal_state["llm_history"] = llm_history.to_list()
                         return SubagentResponse(
                             status=AgentStatus.WAITING_CONFIRM,
                             speak=speak,

@@ -12,7 +12,7 @@ import re
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
 from app.agents.data_collection_schema import DataCollectionLLMResponse
-from app.agents.llm_utils import llm_structured_call
+from app.agents.llm_utils import llm_structured_call, ConversationHistory
 
 logger = logging.getLogger(__name__)
 
@@ -165,14 +165,20 @@ Voice-friendly read-back formats:
 - Phone: group in natural chunks - "four one five, five five five, zero one nine two"
 - Date:  "March fourth, twenty twenty-four"
 
-Always end the confirmation question with: "Is that correct?"
+When presenting a value for confirmation, read it back plainly and ask
+"Is that correct?" — no "Got it" or acknowledgment before the question,
+since you haven't confirmed anything yet.
+
+  GOOD: "I have Sarah Mitchell — is that correct?"
+  GOOD: "Just to confirm, your email is sarah dot mitchell at gmail dot com. Is that correct?"
+  BAD:  "Got it, Sarah Mitchell. Is that correct?" — contradicts itself
 
 After a confirmation is resolved (yes/no/correction), if there are still
 uncollected fields, your speak MUST seamlessly continue to the next field
 in the same sentence. Never end a turn with a bare acknowledgment when
 work remains.
 
-  GOOD: "Got it, Sarah Mitchell. What's the best number to reach you?"
+  GOOD: "Great, and what's the best number to reach you?"
   BAD:  "Thank you." — leaves the caller with nothing to do
 
 The speak for a resolved confirmation is always:
@@ -310,13 +316,16 @@ class DataCollectionAgent(AgentBase):
         # ── Mega-prompt LLM call ──────────────────────────────────────────────
         persona = config.get("assistant", {}).get("persona_name", "Assistant")
         system = _build_mega_prompt(parameters, collected, pending, persona)
+        llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
+        user_msg = f'Caller said: "{utterance}"'
 
         try:
             result = llm_structured_call(
                 system,
-                f'Caller said: "{utterance}"',
+                user_msg,
                 DataCollectionLLMResponse,
                 max_tokens=2048,
+                history=llm_history,
             )
         except Exception as exc:
             logger.warning("DataCollection mega-prompt call failed: %s", exc)
@@ -334,6 +343,11 @@ class DataCollectionAgent(AgentBase):
                 speak="I'm sorry, I didn't quite catch that. Could you please repeat?",
                 internal_state=internal_state,
             )
+
+        # ── Update conversation history ───────────────────────────────────────
+        llm_history.add("user", user_msg)
+        llm_history.add("assistant", result.speak or "")
+        internal_state["llm_history"] = llm_history.to_list()
 
         # ── Handle cannot_process / unhandled ────────────────────────────────
         if result.cannot_process or result.status == "unhandled":

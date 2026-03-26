@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_text_call
+from app.agents.llm_utils import llm_text_call, ConversationHistory
 
 logger = logging.getLogger(__name__)
 
@@ -120,30 +120,25 @@ class FallbackAgent(AgentBase):
         persona = config.get("assistant", {}).get("persona_name", "the firm's receptionist")
         business_context = _build_business_context(config)
 
-        # Include the last few turns so the agent understands call context
-        recent = history[-4:] if history else []
-        history_block = "\n".join(
-            f"  {t['role']}: {t['content'][:120]}" for t in recent
-        ) or "  (start of call)"
-
-        user_msg = (
-            f"RECENT CONVERSATION:\n{history_block}\n\n"
-            f"CALLER ASKED: \"{utterance}\""
-        )
-
         system = _SYSTEM_TEMPLATE.format(
             persona=persona,
             business_context=business_context,
         )
+        user_msg = f'CALLER ASKED: "{utterance}"'
+        llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
         try:
-            speak = llm_text_call(system, user_msg, max_tokens=1024)
+            speak = llm_text_call(system, user_msg, max_tokens=1024, history=llm_history)
         except Exception as exc:
             logger.warning("FallbackAgent LLM call failed: %s", exc)
             speak = (
                 "I'm sorry, I don't have that information handy — "
                 "a team member will be in touch to help you."
             )
+
+        llm_history.add("user", user_msg)
+        llm_history.add("assistant", speak)
+        internal_state["llm_history"] = llm_history.to_list()
 
         # Accumulate notes for post-call review
         new_note = f"Question: {utterance}"

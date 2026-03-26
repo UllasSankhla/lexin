@@ -23,7 +23,7 @@ import logging
 import random
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call
+from app.agents.llm_utils import llm_json_call, llm_text_call, ConversationHistory
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ class NarrativeCollectionAgent(AgentBase):
 
         stage = internal_state.get("stage", "collecting")
         segments: list[str] = internal_state.get("segments", [])
+        llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
         # ── Resume invocation (empty utterance after FAQ interrupt or first call) ─
         if not utterance.strip():
@@ -125,7 +126,10 @@ class NarrativeCollectionAgent(AgentBase):
 
         # ── Stage: asking_done — one response, then always complete ────────
         if stage == "asking_done":
-            done = self._detect_done_intent(utterance)
+            done = self._detect_done_intent(utterance, llm_history)
+            llm_history.add("user", f'Caller said: "{utterance}"')
+            llm_history.add("assistant", '{"done": ' + str(done).lower() + '}')
+            internal_state["llm_history"] = llm_history.to_list()
             if not done:
                 # Caller has something to add — collect it as a final segment.
                 segments.append(utterance)
@@ -148,14 +152,21 @@ class NarrativeCollectionAgent(AgentBase):
         if self._has_enough_content(segments):
             internal_state["stage"] = "asking_done"
             logger.info("NarrativeCollection: enough content — asking if done")
+            speak = "Is there anything else you'd like to add?"
+            llm_history.add("user", f'Caller said: "{utterance}"')
+            llm_history.add("assistant", speak)
+            internal_state["llm_history"] = llm_history.to_list()
             return SubagentResponse(
                 status=AgentStatus.IN_PROGRESS,
-                speak="Is there anything else you'd like to add?",
+                speak=speak,
                 internal_state=internal_state,
             )
 
         # Still collecting — respond with a filler
         filler = self._pick_filler(len(segments))
+        llm_history.add("user", f'Caller said: "{utterance}"')
+        llm_history.add("assistant", filler)
+        internal_state["llm_history"] = llm_history.to_list()
         return SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak=filler,
@@ -181,13 +192,14 @@ class NarrativeCollectionAgent(AgentBase):
         meaningful = [s for s in segments if len(s.split()) >= _MIN_WORDS_IN_SEGMENT]
         return len(meaningful) >= _MIN_SEGMENTS
 
-    def _detect_done_intent(self, utterance: str) -> bool:
+    def _detect_done_intent(self, utterance: str, history: ConversationHistory) -> bool:
         """Return True if the caller indicates they have nothing more to add."""
         try:
             result = llm_json_call(
                 _DONE_INTENT_SYSTEM,
                 f"Caller said: \"{utterance}\"",
                 max_tokens=1024,
+                history=history,
             )
             done = bool(result.get("done", False))
             logger.debug("NarrativeCollection: done_intent=%s for %r", done, utterance[:60])
