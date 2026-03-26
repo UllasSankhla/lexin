@@ -5,7 +5,12 @@ accumulates free-form speech across multiple turns:
 
   caller speaks → agent responds with a filler → caller speaks → ...
   → narrative seems complete → agent asks "Is there anything else?" →
-  caller says no → agent summarises + extracts case_type → COMPLETED
+  caller says no → stores full_narrative → COMPLETED
+
+No summarisation is done here. The full raw narrative is passed to
+IntakeQualificationAgent so it can make a richer decision using the
+complete caller context. Post-call summarisation is handled by
+SummarizationTool at call end.
 
 Interruption handling
 ---------------------
@@ -23,7 +28,7 @@ import logging
 import random
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call, ConversationHistory
+from app.agents.llm_utils import llm_json_call, ConversationHistory
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +60,6 @@ _DONE_INTENT_SYSTEM = (
     "Reply ONLY valid JSON: {\"done\": true} or {\"done\": false}."
 )
 
-_SUMMARY_SYSTEM = (
-    "Summarise a caller's legal matter in 2–3 concise sentences suitable for "
-    "an intake coordinator to read quickly. Then identify the single best-matching "
-    "practice area from the list provided, or 'unknown' if none match clearly. "
-    "Return ONLY valid JSON: "
-    "{\"summary\": \"<2-3 sentence summary>\", \"case_type\": \"<practice area or unknown>\"}"
-)
-
 
 class NarrativeCollectionAgent(AgentBase):
     """
@@ -72,8 +69,6 @@ class NarrativeCollectionAgent(AgentBase):
     -------------------
     stage    : "collecting" | "asking_done"
     segments : list[str] — accumulated caller utterances (never reset)
-    summary  : str | None — populated on COMPLETED
-    case_type: str | None — populated on COMPLETED
 
     Flow (simplified — ask once only)
     ----------------------------------
@@ -97,8 +92,6 @@ class NarrativeCollectionAgent(AgentBase):
             internal_state = {
                 "stage": "collecting",
                 "segments": [],
-                "summary": None,
-                "case_type": None,
             }
 
         stage = internal_state.get("stage", "collecting")
@@ -215,53 +208,21 @@ class NarrativeCollectionAgent(AgentBase):
         config: dict,
         internal_state: dict,
     ) -> SubagentResponse:
-        """Summarise the narrative and return COMPLETED."""
+        """Store the full narrative and return COMPLETED. No summarisation here —
+        that happens at call end via SummarizationTool."""
         full_narrative = " ".join(segments)
-        practice_areas = config.get("practice_areas", [])
-        areas_str = (
-            ", ".join(a["name"] if isinstance(a, dict) else a for a in practice_areas)
-            if practice_areas else "general legal matters"
-        )
-
-        summary = "Unable to summarise."
-        case_type = "unknown"
-        try:
-            result = llm_json_call(
-                _SUMMARY_SYSTEM,
-                f"Practice areas the firm handles: {areas_str}\n\nCaller narrative:\n{full_narrative}",
-            )
-            summary = result.get("summary", summary)
-            case_type = result.get("case_type", case_type)
-        except Exception as exc:
-            logger.warning("NarrativeCollection: summarisation failed: %s", exc)
-
-        internal_state["summary"] = summary
-        internal_state["case_type"] = case_type
         internal_state["stage"] = "done"
 
         logger.info(
-            "NarrativeCollection: COMPLETED | segments=%d | case_type=%s | summary=%r",
-            len(segments), case_type, summary[:80],
-        )
-
-        speak = llm_text_call(
-            "You are an AI receptionist at a law firm. Acknowledge that you've noted "
-            "the caller's matter and will proceed. One warm, professional sentence. "
-            "Do not repeat details back.",
-            f"The caller described a {case_type} matter.",
+            "NarrativeCollection: COMPLETED | segments=%d | chars=%d",
+            len(segments), len(full_narrative),
         )
 
         return SubagentResponse(
             status=AgentStatus.COMPLETED,
-            speak=speak or "Thank you for sharing that. I've noted the details of your matter.",
-            # narrative_summary is the only field shown to the caller in the UI
-            collected={
-                "narrative_summary": summary,
-            },
-            # full_narrative and case_type are backend-only: logged + passed to webhook, not displayed
+            speak="Thank you for sharing that. Let me check if we can assist with your matter.",
             hidden_collected={
                 "full_narrative": full_narrative,
-                "case_type": case_type,
             },
             internal_state=internal_state,
         )

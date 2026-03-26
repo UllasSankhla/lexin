@@ -1,8 +1,9 @@
 """Intake qualification agent — decides if the caller's matter is within firm scope.
 
-Reads collected data from prior agents (narrative_summary, case_type) plus
-config.practice_areas (rich objects with criteria fields and optional policy
-document excerpts) and makes a single LLM qualification decision.
+Reads the full conversation history and full_narrative collected by
+NarrativeCollectionAgent, plus config.practice_areas (rich objects with
+criteria fields and optional policy document excerpts), and makes a single
+LLM qualification decision using complete caller context.
 
 Outcomes
 --------
@@ -34,9 +35,13 @@ _CALENDAR_FILLERS = [
 # ── Prompt constants ──────────────────────────────────────────────────────────
 
 _QUALIFY_SYSTEM = """\
-You are an intake coordinator AI at a law firm. Given a caller's narrative \
-summary, detected case type, and the firm's detailed practice area profiles, \
-decide whether the firm CAN handle this matter.
+You are an intake coordinator AI at a law firm. Given the full conversation \
+transcript and the caller's complete narrative, decide whether the firm CAN \
+handle this matter based on the firm's practice area profiles.
+
+Use ALL available information from the transcript — including any membership \
+details, insurance information, referral context, or specific circumstances \
+the caller mentioned — not just the narrative summary.
 
 Each practice area may include:
   - Qualification criteria: signals that the matter IS in scope.
@@ -47,8 +52,8 @@ Each practice area may include:
 Decision rules:
   "qualified"     — caller's matter clearly matches at least one practice area's
                     qualification criteria.
-  "ambiguous"     — matter matches ambiguous signals, case type is 'unknown', or
-                    no criteria fields are defined for the matched area.
+  "ambiguous"     — matter matches ambiguous signals or no criteria fields are
+                    defined for the matched area.
   "not_qualified" — matter clearly matches disqualification signals across ALL
                     practice areas and matches none of the qualification criteria.
 
@@ -170,14 +175,10 @@ class IntakeQualificationAgent(AgentBase):
             return self._respond_from_state(internal_state, config)
 
         # ── Gather inputs ────────────────────────────────────────────────────
-        # narrative_summary comes from NarrativeCollectionAgent.collected,
-        # case_type from hidden_collected — both land in config["_collected"]
-        # via _persist_response in the handler.  History entries never carry
-        # a "collected" role, so reading from config is the correct source.
+        # full_narrative is stored in hidden_collected by NarrativeCollectionAgent
+        # and lands in config["_collected"] via _persist_response in the handler.
         collected: dict = config.get("_collected", {})
-
-        narrative_summary = collected.get("narrative_summary", "")
-        case_type = collected.get("case_type", "unknown")
+        full_narrative = collected.get("full_narrative", "")
 
         practice_areas: list = config.get("practice_areas", [])
         global_policy_docs: list = config.get("global_policy_documents", [])
@@ -185,11 +186,20 @@ class IntakeQualificationAgent(AgentBase):
         areas_block = _build_practice_areas_prompt(practice_areas)
         global_block = _build_global_policy_prompt(global_policy_docs)
 
+        # Build a readable transcript from the full call history so the LLM
+        # has complete context (memberships, referrals, specific circumstances).
+        transcript_lines = [
+            f"  {t['role'].upper()}: {t['content']}"
+            for t in history
+            if t.get("content", "").strip()
+        ]
+        transcript_block = "\n".join(transcript_lines) if transcript_lines else "  (no transcript available)"
+
         user_message = (
             f"{areas_block}"
             f"{global_block}\n\n"
-            f"Detected case type: {case_type}\n\n"
-            f"Narrative summary: {narrative_summary}"
+            f"FULL CONVERSATION TRANSCRIPT:\n{transcript_block}\n\n"
+            f"CALLER'S FULL NARRATIVE:\n{full_narrative or '(not captured)'}"
         )
 
         # ── LLM qualification call ───────────────────────────────────────────
@@ -219,8 +229,8 @@ class IntakeQualificationAgent(AgentBase):
         internal_state["reason"] = reason
 
         logger.info(
-            "IntakeQualification: decision=%s | matched_area=%s | case_type=%s | reason=%r",
-            decision, matched_area, case_type, reason,
+            "IntakeQualification: decision=%s | matched_area=%s | reason=%r",
+            decision, matched_area, reason,
         )
 
         return self._respond_from_state(internal_state, config)
