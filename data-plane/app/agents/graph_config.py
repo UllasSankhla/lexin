@@ -31,16 +31,36 @@ APPOINTMENT_BOOKING = WorkflowDefinition(
 You are the routing decider for a voice appointment booking assistant.
 
 RULES:
-1. If the caller is answering a question or providing information, route to the
+1. FAREWELL RULE (highest priority — check first): If the caller's utterance is
+   primarily a farewell or sign-off — including "thank you", "thanks", "bye",
+   "goodbye", "have a good day", "that's all", "thanks so much", "I'm done",
+   "talk to you later", or any combination — route to `farewell` immediately.
+   Do NOT route to data_collection or any other agent for farewell utterances.
+2. If the caller is answering a question or providing information, route to the
    active or next primary goal agent (data_collection, narrative_collection, or scheduling).
-2. narrative_collection accepts free-form speech — route to it whenever the caller
+3. narrative_collection accepts free-form speech — route to it whenever the caller
    is describing their legal matter (not asking a question).
-3. If the caller is asking a question (not providing information), route to an
+4. If the caller is asking a question (not providing information), route to an
    interrupt-eligible agent (faq, context_docs, or fallback).
-4. After any interrupt-eligible agent, the invoker handles returning to the
+5. After any interrupt-eligible agent, the invoker handles returning to the
    primary goal — you do not need to re-select it.
-5. intake_qualification is auto-run — never select it directly.
-6. Only select agents listed under AVAILABLE AGENTS.
+6. intake_qualification is auto-run — never select it directly.
+7. Only select agents listed under AVAILABLE AGENTS.
+8. Always respond directly to the caller's current request before offering any
+   extra information or services.
+9. If the caller's speech is garbled or ambiguous, route to fallback so the agent
+   can acknowledge the confusion and ask for clarification instead of guessing or
+   providing unrelated details.
+
+DATA COLLECTION ORDER RULE (applies when data_collection is in_progress):
+During a new client call, the agent must first confirm the caller's full name,
+then immediately ask for and record the phone number, email address, and physical
+mailing address before moving on to any other questions (e.g., date of birth,
+referral source, prior contact). Each piece of information must be verified with
+the caller before proceeding to the next item. This ordered flow ensures all
+required contact details are captured and prevents irrelevant or out-of-sequence
+prompts. Always route to data_collection when the caller is providing any of
+these contact details.
 
 NARRATIVE PRIORITY RULE (overrides rule 3 when narrative_collection is in_progress):
 Callers routinely embed social or rhetorical questions inside their narrative
@@ -65,6 +85,16 @@ Respond ONLY with valid JSON:
     ),
 
     nodes=[
+
+        ActivityNode(
+            id="farewell",
+            agent_class="FarewellAgent",
+            description="Detects caller goodbye and ends the call with a polite closing.",
+            interrupt_eligible=True,
+            on_complete=Edge("end", "caller_farewell"),
+            on_failed=Edge("end",  "caller_farewell"),
+            on_continue=Edge("end", "caller_farewell"),
+        ),
 
         ActivityNode(
             id="faq",
@@ -197,7 +227,7 @@ Respond ONLY with valid JSON:
     ],
 
     interrupt_policy=InterruptPolicy(
-        eligible_agents=["faq", "context_docs", "fallback"],
+        eligible_agents=["farewell", "faq", "context_docs", "fallback"],
         resume_strategy="stack",
     ),
 
