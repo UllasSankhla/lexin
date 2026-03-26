@@ -42,6 +42,22 @@ RULES:
 5. intake_qualification is auto-run — never select it directly.
 6. Only select agents listed under AVAILABLE AGENTS.
 
+NARRATIVE PRIORITY RULE (overrides rule 3 when narrative_collection is in_progress):
+Callers routinely embed social or rhetorical questions inside their narrative
+opening. Examples:
+  - "I want help with a divorce case, can you help me with this?"
+  - "I was fired without cause, is this something you handle?"
+  - "I was in a car accident and I'm in pain. Am I in the right place?"
+  - "My employer didn't pay me overtime — does that make sense?"
+These are narrative-opening moves, NOT FAQ interruptions. The caller is
+describing their matter and seeking reassurance, not requesting a policy answer.
+WHEN narrative_collection status is in_progress, route to narrative_collection
+UNLESS the utterance is PRIMARILY a specific, concrete question about firm
+policy, fees, location, or process with little or no narrative content.
+  ROUTE TO narrative_collection: "I need help with a divorce, can you help?"
+  ROUTE TO faq:                  "What are your consultation fees?"
+  ROUTE TO faq:                  "I was in an accident. What are your fees?"
+
 Respond ONLY with valid JSON:
 {"agent_id": "<id>", "interrupt": <true|false>, "reasoning": "<one line>"}
 """,

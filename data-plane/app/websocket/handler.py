@@ -337,6 +337,36 @@ async def handle_call(
         )
         return (speak + " " + chain_speak).strip(), finalize_reason
 
+    async def _quick_faq_query(utterance: str, history: list[dict], loop) -> str | None:
+        """
+        Query the FAQ agent directly without modifying graph state.
+
+        Used in parallel with narrative_collection when the caller embeds a
+        question inside their narrative opening. Returns the FAQ speak text if
+        a match is found, otherwise None. Failures are swallowed — this is a
+        best-effort enrichment, not a required path.
+        """
+        faq_agent = registry.get("faq")
+        if faq_agent is None:
+            return None
+        try:
+            enriched = {
+                **config,
+                "_collected":    dict(collected_all),
+                "_booking":      booking_result,
+                "_notes":        notes_buffer,
+                "_tool_results": tool_shared,
+            }
+            response = await loop.run_in_executor(
+                None,
+                lambda: faq_agent.process(utterance, {}, enriched, history),
+            )
+            if response.status == AgentStatus.COMPLETED and response.speak:
+                return response.speak
+        except Exception as exc:
+            logger.warning("Parallel FAQ query failed: %s", exc)
+        return None
+
     async def _process_utterance(caller_text: str) -> None:
         nonlocal collected_all, booking_result, notes_buffer
         if session.state_machine.is_terminal():
@@ -360,9 +390,48 @@ async def handle_call(
                 None, lambda: router.select(caller_text, recent_history)
             )
 
-            speak_text, finalize_reason = await _invoke_and_follow(
-                agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
+            # ── Parallel FAQ enrichment during narrative collection ────────────
+            # When the caller is mid-narrative and embeds a question, the router
+            # (after the prompt update) now correctly routes to narrative_collection.
+            # We simultaneously query the FAQ agent so any answerable question gets
+            # a real response. Both tasks run concurrently; the narrative agent's
+            # state update (segment accumulation) happens normally. The speak is
+            # replaced with a merged response: FAQ answer (if found) or a generic
+            # "taking note / team member will follow up" message.
+            narrative_state = graph.states.get("narrative_collection")
+            run_parallel_faq = (
+                agent_id == "narrative_collection"
+                and narrative_state is not None
+                and narrative_state.status == AgentStatus.IN_PROGRESS
+                and narrative_state.internal_state.get("stage") == "collecting"
+                and "?" in caller_text
             )
+
+            if run_parallel_faq:
+                logger.info(
+                    "Parallel FAQ: narrative active + embedded question — running both concurrently"
+                )
+                (speak_text, finalize_reason), faq_speak = await asyncio.gather(
+                    _invoke_and_follow(
+                        agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
+                    ),
+                    _quick_faq_query(caller_text, recent_history, loop),
+                )
+                if faq_speak:
+                    speak_text = f"I've noted your matter. {faq_speak}"
+                    logger.info("Parallel FAQ: merged FAQ answer into narrative response")
+                else:
+                    speak_text = (
+                        "I'm taking note of your matter here. "
+                        "A team member will reach out to help you with "
+                        "any additional questions you may have."
+                    )
+                    logger.info("Parallel FAQ: no FAQ match — using generic acknowledgement")
+            else:
+                speak_text, finalize_reason = await _invoke_and_follow(
+                    agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
+                )
+            # ── End parallel FAQ enrichment ───────────────────────────────────
 
             consecutive_errors[0] = 0
 
