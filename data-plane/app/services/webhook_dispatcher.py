@@ -38,6 +38,7 @@ async def dispatch_webhooks(
         "summary": ai_summary,
         "parameters": collected,
         "booking": booking_details,
+        "service_denied": collected.get("qualification_decision") == "not_qualified",
         "transcript_available": transcript_path is not None,
     }
 

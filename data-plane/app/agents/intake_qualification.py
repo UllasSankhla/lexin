@@ -58,17 +58,19 @@ Reply ONLY valid JSON:
 
 _NOT_QUALIFIED_SPEAK_SYSTEM = (
     "You are an AI receptionist at a law firm. The caller's matter does not fall "
-    "within the firm's practice areas. Decline politely, acknowledge their "
-    "situation with empathy, and suggest they seek a firm that specialises in "
-    "their area of need. Two sentences maximum. Do not be dismissive."
+    "within the firm's practice areas. In two to three sentences: apologise that "
+    "you are unable to assist with their specific matter, state the practice areas "
+    "the firm does handle (provided below), and close warmly. "
+    "Do not be dismissive. Voice-call style — no lists, no bullet points."
 )
 
 _NOT_QUALIFIED_REFERRAL_SYSTEM = (
     "You are an AI receptionist at a law firm. The caller's matter does not fall "
     "within the firm's practice areas. The firm has provided a referral suggestion: "
     "{referral_suggestion}. "
-    "Decline politely, acknowledge their situation with empathy, and include the "
-    "referral suggestion naturally. Two sentences maximum."
+    "In two to three sentences: apologise that you are unable to assist, state the "
+    "practice areas the firm does handle (provided below), include the referral "
+    "suggestion naturally, and close warmly. Voice-call style — no lists, no bullet points."
 )
 
 
@@ -238,10 +240,16 @@ class IntakeQualificationAgent(AgentBase):
                 _NOT_QUALIFIED_REFERRAL_SYSTEM.format(referral_suggestion=referral)
                 if referral else _NOT_QUALIFIED_SPEAK_SYSTEM
             )
-            speak = llm_text_call(speak_system, reason) or (
-                "Thank you for reaching out. Unfortunately, this matter falls outside "
-                "our current practice areas. We encourage you to seek a firm that "
-                "specialises in your area of need."
+            area_names = [
+                a["name"] if isinstance(a, dict) else str(a)
+                for a in practice_areas
+            ]
+            areas_str = ", ".join(area_names) if area_names else "general legal matters"
+            user_msg = f"Caller's matter: {reason}\nFirm's supported practice areas: {areas_str}"
+            speak = llm_text_call(speak_system, user_msg) or (
+                f"I'm sorry, but we're unable to assist with that type of matter. "
+                f"Our firm focuses on {areas_str}. "
+                f"We wish you the best and hope you find the right help."
             )
             return SubagentResponse(
                 status=AgentStatus.FAILED,

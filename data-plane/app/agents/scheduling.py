@@ -295,14 +295,9 @@ class SchedulingAgent(AgentBase):
                 logger.error("SchedulingAgent booking failed: %s", exc)
                 booking = {"booking_id": "N/A", "error": str(exc)}
 
-            booking_id = booking.get("booking_id", "N/A")
-            has_email = bool(booking.get("cancel_url") or booking.get("reschedule_url"))
-            field_summary = "\n".join(f"- {k}: {v}" for k, v in collected.items() if v)
-            email_note = " A confirmation email with cancel and reschedule links has been sent." if has_email else ""
-            speak = llm_text_call(
-                "Generate a warm booking confirmation message for a voice call. Two to three sentences.",
-                f"Slot: {slot.description}\nBooking ref: {booking_id}\nCaller details:\n{field_summary or '(none)'}\n{email_note}",
-            )
+            has_email = bool(collected.get("email_address"))
+            email_note = " We've sent the details to your email." if has_email else ""
+            speak = f"Your meeting has been scheduled.{email_note} We look forward to speaking with you!"
             internal_state["stage"] = "done"
             return SubagentResponse(
                 status=AgentStatus.COMPLETED,
