@@ -52,6 +52,22 @@ RULES:
    can acknowledge the confusion and ask for clarification instead of guessing or
    providing unrelated details.
 
+PROACTIVE GOAL PURSUIT (applies at all times):
+The input always shows NEXT PRIMARY GOAL TO PURSUE and BOOKING STAGES. These are
+your compass — the conversation must always be advancing toward the next incomplete
+primary goal.
+- If the caller's utterance can be handled by the primary goal agent (providing
+  info, answering a collection question, describing their matter), route there
+  directly rather than to an interrupt agent.
+- Route to an interrupt agent ONLY when the caller is asking a concrete question
+  that the primary goal agent clearly cannot answer (e.g. fees, location, firm
+  policy) — and even then only if the utterance is PRIMARILY a question rather
+  than a question embedded in a narrative.
+- If the caller asks "what information do you need?", "what do you need to book?",
+  "what are the steps?", "what happens next?", or any similar process or
+  requirements question — route to the NEXT PRIMARY GOAL agent. That agent knows
+  its own requirements and can explain the remaining stages of the booking process.
+
 DATA COLLECTION ORDER RULE (applies when data_collection is in_progress):
 During a new client call, the agent must first confirm the caller's full name,
 then immediately ask for and record the phone number, email address, and physical
@@ -152,7 +168,7 @@ Respond ONLY with valid JSON:
             is_primary_goal=True,
             goal_order=2,
             interrupt_eligible=False,
-            depends_on=["data_collection"],
+            depends_on=[],
             on_complete=Edge("intake_qualification"),
             on_failed=Edge("end", "narrative_collection_failed"),
             on_continue=Edge("decider"),

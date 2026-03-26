@@ -33,8 +33,9 @@ from app.agents.llm_utils import llm_json_call, ConversationHistory
 logger = logging.getLogger(__name__)
 
 # Minimum segments to collect before checking for narrative completion.
-# Prevents asking "Is there anything else?" after a single short sentence.
-_MIN_SEGMENTS = 2
+# Set to 1: ask "Is there anything else?" after the first meaningful segment,
+# then always complete on the next response (no more than one confirmation).
+_MIN_SEGMENTS = 1
 _MIN_WORDS_IN_SEGMENT = 4
 
 # Filler phrases spoken while the caller is mid-narrative.

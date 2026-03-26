@@ -1,0 +1,17 @@
+# Secrets
+.env
+*.env
+
+# Generated output — not source
+data/
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/

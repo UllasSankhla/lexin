@@ -18,6 +18,7 @@ Scenarios:
     9.  FAQ interrupt mid-narrative → resume → narrative continues
     10. Not-qualified path → end("not_qualified")
     11. Ambiguous path → qualified → scheduling → book
+    12. Divorce case → not_qualified (family law is outside firm's two practice areas)
 """
 from __future__ import annotations
 
@@ -1208,6 +1209,104 @@ def scenario_ambiguous_qualification() -> SimResult:
     return result
 
 
+def scenario_divorce_not_qualified() -> SimResult:
+    """
+    Caller wants help with a divorce — family law is NOT one of the firm's two
+    practice areas (Personal Injury and Employment Law only).
+
+    IQ returns FAILED with not_qualified → on_failed=Edge("end", "not_qualified").
+    Scheduling must never be invoked.
+    """
+    dc = [
+        SubagentResponse(
+            status=AgentStatus.COMPLETED, speak="",
+            collected={"name": "Sarah Mitchell", "email": "sarah.m@example.com"},
+        ),
+    ]
+
+    nc = [
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="Could you describe your legal matter for me?",
+        ),
+        SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak="I see. Is there anything else you'd like to add?",
+            internal_state={"stage": "asking_done", "segments": [
+                "My husband and I are getting divorced and we can't agree on who keeps the house.",
+            ]},
+        ),
+        SubagentResponse(
+            status=AgentStatus.COMPLETED,
+            speak="Thank you, I've noted your matter.",
+            collected={
+                "narrative_summary": (
+                    "Caller is going through a contested divorce and needs legal help "
+                    "with asset division, specifically regarding the family home."
+                ),
+                "case_type": "family law / divorce",
+                "full_narrative": (
+                    "My husband and I are getting divorced and we can't agree on who keeps the house."
+                ),
+            },
+        ),
+    ]
+
+    # IQ: divorce is outside Personal Injury + Employment Law → not_qualified → FAILED
+    iq = [
+        SubagentResponse(
+            status=AgentStatus.FAILED,
+            speak=(
+                "I'm sorry to hear about your situation. Unfortunately, divorce and family law "
+                "matters fall outside our practice areas — Nexus Law handles personal injury "
+                "and employment law only. We'd encourage you to reach out to a family law "
+                "attorney who can better assist you."
+            ),
+            collected={
+                "qualification_decision": "not_qualified",
+                "qualification_reason": (
+                    "Divorce and asset division are family law matters, outside this firm's "
+                    "practice areas of personal injury and employment law."
+                ),
+            },
+        ),
+    ]
+
+    mocks = {
+        "data_collection":      ScriptedAgent("data_collection", dc),
+        "narrative_collection": ScriptedAgent("narrative_collection", nc),
+        "intake_qualification": ScriptedAgent("intake_qualification", iq),
+        "faq":                  ScriptedAgent("faq", []),
+        "context_docs":         ScriptedAgent("context_docs", []),
+        "fallback":             ScriptedAgent("fallback", []),
+        "scheduling":           ScriptedAgent("scheduling", []),   # must never be invoked
+        "webhook":              ScriptedAgent("webhook", []),
+    }
+
+    script = [
+        SimUtterance(
+            "My husband and I are getting divorced and we can't agree on who keeps the house.",
+            force_agent="narrative_collection",
+        ),
+        SimUtterance("No, that's everything.", force_agent="narrative_collection"),
+        # NC COMPLETED → chains IQ → IQ FAILED → on_failed=Edge("end", "not_qualified")
+    ]
+
+    result = WorkflowSimulator(APPOINTMENT_BOOKING, mocks).run(script)
+
+    sched_mock = mocks["scheduling"]
+    if sched_mock._call_count > 0:  # type: ignore[attr-defined]
+        print(f"\n  ⚠ WARNING: scheduling was called {sched_mock._call_count}x — should be 0!")
+    else:
+        print(f"\n  ✓ CONFIRMED: scheduling not invoked (correctly terminated at not_qualified)")
+
+    iq_speak = iq[0].speak
+    print(f"\n  Refusal message spoken to caller:")
+    print(f"    {iq_speak!r}")
+
+    return result
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -1223,6 +1322,8 @@ def main() -> int:
         ("9  — FAQ interrupt mid-narrative + resume",   scenario_faq_interrupt_mid_narrative,  "completed"),
         ("10 — Not-qualified path",                     scenario_not_qualified,                "not_qualified"),
         ("11 — Ambiguous qualification → scheduling",   scenario_ambiguous_qualification,      "completed"),
+        ("12 — Divorce case → not_qualified (family law outside scope)",
+                                                        scenario_divorce_not_qualified,        "not_qualified"),
     ]
 
     passed, failed = 0, 0

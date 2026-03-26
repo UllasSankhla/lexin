@@ -267,3 +267,23 @@ class WorkflowGraph:
             for node in self.available_nodes()
         ]
         return "\n".join(lines) or "  (none)"
+
+    def primary_goal_summary(self) -> str:
+        """Ordered list of primary goal stages with their current status.
+        Used to answer caller questions about what is needed before booking,
+        and injected into enriched_config as _workflow_stages."""
+        primary = sorted(
+            [n for n in self.nodes.values() if n.is_primary_goal],
+            key=lambda n: n.goal_order or 0,
+        )
+        next_goal = self.next_primary_goal()
+        lines = [
+            "BOOKING STAGES — steps required before an appointment can be confirmed:"
+        ]
+        for node in primary:
+            state = self.states[node.id]
+            status_label = state.status.value.replace("_", " ")
+            marker = "  ← CURRENT STEP" if node.id == next_goal else ""
+            lines.append(f"  {node.goal_order}. {node.id} [{status_label}]{marker}")
+            lines.append(f"     {node.description}")
+        return "\n".join(lines)

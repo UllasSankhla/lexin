@@ -94,15 +94,21 @@ def _build_mega_prompt(
     collected: dict,
     pending: dict | None,
     persona_name: str,
+    workflow_stages: str = "",
 ) -> str:
     fields_block = _build_fields_block(parameters)
     collected_json = json.dumps(collected, indent=2) if collected else "{}"
     pending_json = json.dumps(pending, indent=2) if pending else "none"
+    stages_block = (
+        f"\n{workflow_stages}\n"
+        if workflow_stages else ""
+    )
 
     return f"""\
 You are an AI intake receptionist conducting a voice call on behalf of {persona_name}.
 Your role right now is to collect specific information from the caller.
 Be warm, patient, and concise — this is a voice call, not a form.
+{stages_block}
 
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 FIELDS TO COLLECT
@@ -199,9 +205,35 @@ this utterance as a yes/no FIRST before attempting any field extraction:
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 CANNOT-PROCESS CONDITIONS
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
+INFORMATION REQUEST RULE — handle BEFORE considering cannot_process:
+If the caller asks any of the following, do NOT set cannot_process=true:
+  a) "What information do you need?", "what do you need from me?", "what are you
+     collecting?", "what details do you require?" — questions about the fields
+     being gathered right now.
+     → Name the remaining uncollected required fields in plain conversational
+       language, then pivot back to the current field question in the same sentence.
+     Example (phone and email remain):
+       speak = "I still need your phone number and email address. Let's continue —
+                what's the best number to reach you, including the area code?"
+
+  b) "What do I need to book an appointment?", "what are the steps?", "what
+     happens after this?", "what information is needed before we can schedule?" —
+     questions about the overall booking process or requirements.
+     → Use the BOOKING STAGES block shown above (if present) to explain all
+       remaining stages in plain conversational language, then pivot back to the
+       current field question.
+     Example:
+       speak = "To book an appointment I'll need to collect your contact details
+                first — which is what we're doing now — then I'll ask you to
+                describe your matter, and after that we'll check whether it falls
+                within our practice areas before scheduling a slot. Let's continue:
+                what's the best number to reach you?"
+
+  Set status="in_progress" for both cases.
+
 Set cannot_process=true and status="unhandled" when:
-- The utterance is a question unrelated to providing field values
-  (e.g. "How long will this take?", "What is this call about?")
+- The utterance is a question unrelated to providing field values AND unrelated
+  to what information is being collected (e.g. "How long will this take?", "What are your fees?")
 - The caller expresses a desire to stop, cancel, or speak to a person
   (e.g. "I want to speak to someone", "Can we stop?", "I need to cancel")
 - The utterance is complete gibberish or clearly a transcription error
@@ -315,7 +347,8 @@ class DataCollectionAgent(AgentBase):
 
         # ── Mega-prompt LLM call ──────────────────────────────────────────────
         persona = config.get("assistant", {}).get("persona_name", "Assistant")
-        system = _build_mega_prompt(parameters, collected, pending, persona)
+        workflow_stages = config.get("_workflow_stages", "")
+        system = _build_mega_prompt(parameters, collected, pending, persona, workflow_stages)
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
         user_msg = f'Caller said: "{utterance}"'
 

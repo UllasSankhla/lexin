@@ -41,9 +41,21 @@ class Router:
 
         status_block = graph.status_summary()
         available_block = graph.available_summary()
+        booking_stages_block = graph.primary_goal_summary()
         history_lines = "\n".join(
             f"  {t['role']}: {t['content'][:120]}" for t in recent_history[-8:]
         ) or "  (none)"
+
+        next_goal_id = graph.next_primary_goal()
+        next_goal_line = ""
+        if next_goal_id:
+            next_node = graph.nodes[next_goal_id]
+            next_state = graph.states[next_goal_id]
+            next_goal_line = (
+                f"\nNEXT PRIMARY GOAL TO PURSUE: {next_goal_id} "
+                f"[{next_state.status.value}]\n"
+                f"  {next_node.description}\n"
+            )
 
         hint_block = (
             f"\nCONTEXT HINT: {hint}\n"
@@ -56,6 +68,8 @@ class Router:
 
         user_msg = (
             f"MISSION:\n{workflow.goal.description}\n\n"
+            f"{next_goal_line}"
+            f"BOOKING STAGES:\n{booking_stages_block}\n\n"
             f"RECENT CONVERSATION:\n{history_lines}\n\n"
             f"AGENT STATUS:\n{status_block}\n\n"
             f"AVAILABLE AGENTS:\n{available_block}\n\n"

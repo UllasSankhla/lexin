@@ -232,10 +232,11 @@ async def handle_call(
 
         enriched_config = {
             **config,
-            "_collected":    dict(collected_all),
-            "_booking":      booking_result,
-            "_notes":        notes_buffer,
-            "_tool_results": tool_shared,
+            "_collected":       dict(collected_all),
+            "_booking":         booking_result,
+            "_notes":           notes_buffer,
+            "_tool_results":    tool_shared,
+            "_workflow_stages": graph.primary_goal_summary(),
         }
 
         agent = registry[agent_id]
@@ -352,10 +353,11 @@ async def handle_call(
         try:
             enriched = {
                 **config,
-                "_collected":    dict(collected_all),
-                "_booking":      booking_result,
-                "_notes":        notes_buffer,
-                "_tool_results": tool_shared,
+                "_collected":       dict(collected_all),
+                "_booking":         booking_result,
+                "_notes":           notes_buffer,
+                "_tool_results":    tool_shared,
+                "_workflow_stages": graph.primary_goal_summary(),
             }
             response = await loop.run_in_executor(
                 None,
