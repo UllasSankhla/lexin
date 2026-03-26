@@ -187,7 +187,7 @@ class NarrativeCollectionAgent(AgentBase):
             result = llm_json_call(
                 _DONE_INTENT_SYSTEM,
                 f"Caller said: \"{utterance}\"",
-                max_tokens=32,
+                max_tokens=1024,
             )
             done = bool(result.get("done", False))
             logger.debug("NarrativeCollection: done_intent=%s for %r", done, utterance[:60])

@@ -200,7 +200,7 @@ class IntakeQualificationAgent(AgentBase):
             result = llm_json_call(
                 _QUALIFY_SYSTEM,
                 user_message,
-                max_tokens=160,
+                max_tokens=1024,
             )
             decision = result.get("decision", "ambiguous")
             matched_area = result.get("matched_area") or None

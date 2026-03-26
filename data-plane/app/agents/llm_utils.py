@@ -93,7 +93,7 @@ def llm_structured_call(
     system_prompt: str,
     user_message: str,
     response_model: type,
-    max_tokens: int = 500,
+    max_tokens: int = 1024,
 ) -> object:
     """
     Single LLM call that returns a validated Pydantic model instance.

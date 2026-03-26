@@ -72,7 +72,7 @@ def generate_call_summary(
                     )},
                     {"role": "user", "content": transcript_text},
                 ],
-                max_tokens=20,
+                max_tokens=1024,
                 temperature=0,
             )
             extracted = name_response.choices[0].message.content.strip()
@@ -103,7 +103,7 @@ def generate_call_summary(
                 {"role": "system", "content": "You are a concise call summary assistant. Output only the summary text, no headers or labels."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=200,
+            max_tokens=1024,
             temperature=0.3,
         )
         summary = response.choices[0].message.content.strip()

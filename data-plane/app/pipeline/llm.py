@@ -218,7 +218,7 @@ class LLMToolkit:
 
     # ── Private helper ────────────────────────────────────────────────────────
 
-    def _one_shot(self, prompt: str, purpose: str = "one_shot", max_tokens: int = 120) -> str:
+    def _one_shot(self, prompt: str, purpose: str = "one_shot", max_tokens: int = 1024) -> str:
         """Single-turn call with no history; returns stripped response text."""
         logger.info("LLM toolkit call | purpose=%s prompt=%r", purpose, prompt[:200])
         result, tokens, latency_ms = self._client.complete(
@@ -335,7 +335,7 @@ class LLMToolkit:
             f"Be friendly and concise. Ask which one they prefer. "
             f"Do NOT use bullet points or markdown. Keep it under three sentences."
         )
-        return self._one_shot(prompt, purpose="present_slots", max_tokens=150)
+        return self._one_shot(prompt, purpose="present_slots", max_tokens=1024)
 
     def extract_slot_choice(self, utterance: str, slots: list["TimeSlot"]) -> Optional["TimeSlot"]:
         """
@@ -389,7 +389,7 @@ class LLMToolkit:
             f"and wish them well.{email_note} "
             f"Two to three sentences, conversational voice style."
         )
-        return self._one_shot(prompt, purpose="confirm_booking", max_tokens=150)
+        return self._one_shot(prompt, purpose="confirm_booking", max_tokens=1024)
 
     # ── Date preference extraction ────────────────────────────────────────────
 
@@ -415,7 +415,7 @@ class LLMToolkit:
             f'  {{"start_time": "YYYY-MM-DDTHH:MM:SSZ", "end_time": "YYYY-MM-DDTHH:MM:SSZ"}}\n'
             f"If you cannot determine a date range, respond with exactly: NONE"
         )
-        result = self._one_shot(prompt, purpose="extract_date_preference", max_tokens=80)
+        result = self._one_shot(prompt, purpose="extract_date_preference", max_tokens=1024)
         if not result or result.strip().upper() == "NONE":
             return None
         try:

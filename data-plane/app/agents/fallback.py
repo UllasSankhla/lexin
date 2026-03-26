@@ -137,7 +137,7 @@ class FallbackAgent(AgentBase):
         )
 
         try:
-            speak = llm_text_call(system, user_msg, max_tokens=200)
+            speak = llm_text_call(system, user_msg, max_tokens=1024)
         except Exception as exc:
             logger.warning("FallbackAgent LLM call failed: %s", exc)
             speak = (

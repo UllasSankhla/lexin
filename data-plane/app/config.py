@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     cerebras_api_key: str = ""
     cerebras_model: str = "qwen-3-235b-a22b-instruct-2507"
-    cerebras_max_tokens: int = 512
+    cerebras_max_tokens: int = 1024
     cerebras_temperature: float = 0.4
 
     max_call_duration_sec: int = 600   # 10 minutes — also controls receive loop timeout
