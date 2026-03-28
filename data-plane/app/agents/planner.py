@@ -39,6 +39,8 @@ _MAX_PLAN_STEPS = 3
 _FILLER_AGENTS = {"narrative_collection"}
 # Agents whose speak is an answer to a question (not a question themselves)
 _ANSWER_AGENTS = {"faq", "context_docs", "fallback"}
+# Agent IDs whose speaks are empathetic acknowledgments (no questions, no data)
+_EMPATHY_AGENTS = {"empathy"}
 
 
 # ── Plan models ────────────────────────────────────────────────────────────────
@@ -105,28 +107,35 @@ STEP 2: PLANNING RULES (check in order)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. FAREWELL — If utterance_type=FAREWELL, plan ONLY: [invoke("farewell")].
 
-2. PENDING CONFIRM — If PENDING CONFIRMATION is shown and utterance_type=DIRECT_ANSWER
+2. EMPATHY — If utterance_type=NARRATIVE and "empathy" is in AVAILABLE AGENTS
+   (meaning it has not yet been used this call), prepend an empathy step:
+   invoke("empathy") → invoke("narrative_collection") [or "data_collection" if
+   narrative_collection is not yet available].
+   Skip this rule if "empathy" is NOT listed in AVAILABLE AGENTS.
+
+3. PENDING CONFIRM — If PENDING CONFIRMATION is shown and utterance_type=DIRECT_ANSWER
    (caller is saying yes/no/confirm/correct), plan: [invoke("data_collection")].
    The data_collection agent will handle the confirmation response.
 
-3. CORRECTION — If utterance_type=CORRECTION and a contact field was corrected,
+4. CORRECTION — If utterance_type=CORRECTION and a contact field was corrected,
    plan: reset_fields([field_key]) → invoke("data_collection")
 
-4. DIRECT_ANSWER to narrative — If utterance_type=DIRECT_ANSWER and the AI last
+5. DIRECT_ANSWER to narrative — If utterance_type=DIRECT_ANSWER and the AI last
    asked about the caller's legal situation or story, plan: [invoke("narrative_collection")].
 
-5. CONTINUATION — If utterance_type=CONTINUATION, route to the same agent the AI
+6. CONTINUATION — If utterance_type=CONTINUATION, route to the same agent the AI
    was last using. If that agent is unavailable, route to narrative_collection.
 
-6. MULTI-INTENT — If the utterance contains BOTH contact data (name, phone, email)
-   AND a description of a legal matter or situation:
+7. MULTI-INTENT — If the utterance contains BOTH contact data (name, phone, email)
+   AND a description of a legal matter or situation, and "empathy" is NOT available:
    invoke("data_collection") → invoke("narrative_collection")
+   If "empathy" IS available: invoke("empathy") → invoke("data_collection") → invoke("narrative_collection")
 
-7. NEW_TOPIC / QUESTION — If utterance_type=NEW_TOPIC and caller is asking about
+8. NEW_TOPIC / QUESTION — If utterance_type=NEW_TOPIC and caller is asking about
    fees, process, location, or firm policy: invoke("faq"), invoke("context_docs"),
    or invoke("fallback") as appropriate.
 
-8. GOAL PURSUIT — Always advance toward the NEXT PRIMARY GOAL. If no interrupt-worthy
+9. GOAL PURSUIT — Always advance toward the NEXT PRIMARY GOAL. If no interrupt-worthy
    question is present, route to the NEXT PRIMARY GOAL agent.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -354,6 +363,16 @@ class Planner:
         if len(speaks) == 2:
             a_text, a_id = speaks[0]
             b_text, b_id = speaks[1]
+
+            # Empathy acknowledgment + any agent: empathy first, then other speak
+            if a_id in _EMPATHY_AGENTS:
+                if b_id in _FILLER_AGENTS:
+                    # narrative filler after empathy is redundant — empathy alone
+                    return a_text
+                a_clean = a_text.rstrip()
+                b_clean = b_text.strip()
+                sep = " " if a_clean.endswith((".", "?", "!")) else ". "
+                return f"{a_clean}{sep}{b_clean}"
 
             # Answer agent + data_collection: answer first, then re-ask
             if a_id in _ANSWER_AGENTS and b_id == "data_collection":

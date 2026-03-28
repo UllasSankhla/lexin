@@ -9,12 +9,14 @@ from app.agents.faq import FAQAgent
 from app.agents.context_docs import ContextDocsAgent
 from app.agents.fallback import FallbackAgent
 from app.agents.farewell import FarewellAgent
+from app.agents.empathy import EmpathyAgent
 from app.agents.scheduling import SchedulingAgent
 
 
 def build_registry(call_id: str, transcript: list[dict]) -> dict[str, AgentBase]:
     """Build the agent registry for a single call."""
     return {
+        "empathy":               EmpathyAgent(),
         "faq":                   FAQAgent(),
         "context_docs":          ContextDocsAgent(),
         "fallback":              FallbackAgent(),

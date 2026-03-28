@@ -103,6 +103,21 @@ Respond ONLY with valid JSON:
     nodes=[
 
         ActivityNode(
+            id="empathy",
+            agent_class="EmpathyAgent",
+            description=(
+                "Acknowledges the caller's situation with genuine empathy before "
+                "proceeding with intake. Invoked once when the caller first describes "
+                "their legal matter or personal circumstances."
+            ),
+            interrupt_eligible=False,
+            depends_on=[],
+            on_complete=Edge("decider"),
+            on_failed=Edge("decider"),
+            on_continue=Edge("decider"),
+        ),
+
+        ActivityNode(
             id="farewell",
             agent_class="FarewellAgent",
             description="Detects caller goodbye and ends the call with a polite closing.",

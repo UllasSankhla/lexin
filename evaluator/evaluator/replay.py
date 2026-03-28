@@ -32,6 +32,7 @@ from app.agents.faq import FAQAgent                                 # noqa: E402
 from app.agents.context_docs import ContextDocsAgent                # noqa: E402
 from app.agents.fallback import FallbackAgent                       # noqa: E402
 from app.agents.farewell import FarewellAgent                       # noqa: E402
+from app.agents.empathy import EmpathyAgent                         # noqa: E402
 from app.agents.scheduling import SchedulingAgent, _detect_confirmation  # noqa: E402
 from app.agents.graph_config import APPOINTMENT_BOOKING             # noqa: E402
 from app.agents.workflow import WorkflowGraph                       # noqa: E402
@@ -115,6 +116,7 @@ class MockSchedulingAgent(SchedulingAgent):
 
 def _build_registry() -> dict:
     return {
+        "empathy":              EmpathyAgent(),
         "farewell":             FarewellAgent(),
         "faq":                  FAQAgent(),
         "context_docs":         ContextDocsAgent(),
