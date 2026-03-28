@@ -50,10 +50,9 @@ def _call(utterance: str, state: dict) -> tuple:
 
 
 def _enough_segments() -> list[str]:
-    """Two meaningful segments — satisfies _has_enough_content."""
+    """One meaningful segment — satisfies _has_enough_content (MIN_SEGMENTS=1)."""
     return [
         "I was in a car accident last month on the highway",
-        "The other driver ran a red light and hit my passenger door",
     ]
 
 
@@ -87,13 +86,13 @@ def test_short_utterance_gets_filler_not_done_question():
     assert state["stage"] == "collecting"
 
 
-def test_first_meaningful_segment_gets_filler():
-    """After first meaningful segment (only 1, below MIN_SEGMENTS), expect filler."""
+def test_first_meaningful_segment_triggers_asking_done():
+    """After first meaningful segment (MIN_SEGMENTS=1), agent asks 'anything else?'."""
     _, state = _call("", {})
     resp, state = _call("I was in a car accident last month on the highway.", state)
     assert resp.status == AgentStatus.IN_PROGRESS
-    assert "anything else" not in resp.speak.lower()
-    assert state["stage"] == "collecting"
+    assert "anything else" in resp.speak.lower()
+    assert state["stage"] == "asking_done"
 
 
 def test_utterance_appended_during_collecting():
@@ -121,17 +120,17 @@ def test_no_filler_contains_anything_else():
 # ── Transition to asking_done ─────────────────────────────────────────────────
 
 def test_transitions_to_asking_done_after_min_segments():
-    """After MIN_SEGMENTS meaningful segments, stage must become asking_done."""
+    """After MIN_SEGMENTS (1) meaningful segment, stage must become asking_done."""
     _, state = _call("", {})
-    _, state = _call("I was in a car accident last month on the highway.", state)
-    resp, state = _call("The other driver ran a red light and hit my car door.", state)
+    resp, state = _call("I was in a car accident last month on the highway.", state)
     assert state["stage"] == "asking_done"
     assert "anything else" in resp.speak.lower()
 
 
-def test_does_not_ask_done_before_min_segments():
+def test_does_not_ask_done_for_one_word_segment():
+    """A single short segment (below MIN_WORDS) should stay collecting."""
     _, state = _call("", {})
-    resp, state = _call("I was in a car accident last month on the highway.", state)
+    resp, state = _call("Okay.", state)
     assert state["stage"] == "collecting"
     assert "anything else" not in resp.speak.lower()
 
@@ -146,30 +145,20 @@ def test_does_not_ask_done_for_short_segments():
 
 # ── [BUG-B] asking_done always completes — never loops ───────────────────────
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Thank you.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_asking_done_completes_when_done(mock_json, mock_text):
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+def test_asking_done_completes_when_done(mock_json):
     """done_intent=True → COMPLETED."""
-    mock_json.side_effect = [
-        {"done": True},
-        {"summary": "Summary.", "case_type": "personal injury"},
-    ]
     resp, _ = _call("No that's all", _asking_done_state())
     assert resp.status == AgentStatus.COMPLETED
 
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Thank you.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_asking_done_completes_even_when_not_done(mock_json, mock_text):
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": False})
+def test_asking_done_completes_even_when_not_done(mock_json):
     """
     BUG-B: The old code looped back to collecting when done_intent=False.
     Now: if the caller has more to add, collect it as a final segment, then
     complete immediately. There is no path back to collecting.
     """
-    mock_json.side_effect = [
-        {"done": False},
-        {"summary": "Summary.", "case_type": "personal injury"},
-    ]
     resp, _ = _call("Actually I should also mention the injuries.", _asking_done_state())
     assert resp.status == AgentStatus.COMPLETED, (
         "Agent must complete after asking_done regardless of done_intent — "
@@ -177,16 +166,11 @@ def test_asking_done_completes_even_when_not_done(mock_json, mock_text):
     )
 
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Thank you.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_asking_done_never_returns_in_progress_with_stage_collecting(mock_json, mock_text):
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": False})
+def test_asking_done_never_returns_in_progress_with_stage_collecting(mock_json):
     """
     Stage must never go back to 'collecting' from 'asking_done'.
     """
-    mock_json.side_effect = [
-        {"done": False},
-        {"summary": "Summary.", "case_type": "personal injury"},
-    ]
     _, new_state = _call("Wait I want to add more", _asking_done_state())
     assert new_state.get("stage") != "collecting", (
         "Stage returned to collecting from asking_done — loop bug"
@@ -195,34 +179,22 @@ def test_asking_done_never_returns_in_progress_with_stage_collecting(mock_json, 
 
 # ── [BUG-D] Segments content when done ───────────────────────────────────────
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Noted.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_done_response_not_added_to_segments(mock_json, mock_text):
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+def test_done_response_not_added_to_segments(mock_json):
     """
     BUG-D: When done_intent=True, the caller's 'No' should NOT be appended
     to segments — it's a conversational reply, not narrative content.
     """
-    mock_json.side_effect = [
-        {"done": True},
-        {"summary": "Summary.", "case_type": "unknown"},
-    ]
     state = _asking_done_state()
     original_segment_count = len(state["segments"])
-
     resp, _ = _call("No that's all", state)
     assert "No that's all" not in resp.hidden_collected["full_narrative"]
-    # Segment count should not have grown
     assert len(resp.hidden_collected["full_narrative"].split(". ")) <= original_segment_count + 1
 
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Noted.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_additional_content_added_to_segments_when_not_done(mock_json, mock_text):
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": False})
+def test_additional_content_added_to_segments_when_not_done(mock_json):
     """When done_intent=False, the utterance IS appended (it's new narrative content)."""
-    mock_json.side_effect = [
-        {"done": False},
-        {"summary": "Summary.", "case_type": "personal injury"},
-    ]
     extra = "I also sustained a back injury and missed three weeks of work."
     resp, _ = _call(extra, _asking_done_state())
     assert extra in resp.hidden_collected["full_narrative"]
@@ -252,26 +224,17 @@ def test_done_intent_prompt_has_stop_and_continue_framing():
 
 # ── COMPLETED output ──────────────────────────────────────────────────────────
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Noted.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_completed_collected_dict(mock_json, mock_text):
-    mock_json.side_effect = [
-        {"done": True},
-        {"summary": "Car accident on highway.", "case_type": "personal injury"},
-    ]
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+def test_completed_collected_dict(mock_json):
+    """COMPLETED response must include full_narrative in hidden_collected."""
     resp, _ = _call("No", _asking_done_state())
-    assert resp.collected["narrative_summary"] == "Car accident on highway."
-    assert resp.hidden_collected["case_type"] == "personal injury"
+    assert resp.status == AgentStatus.COMPLETED
     assert resp.hidden_collected["full_narrative"]
 
 
-@patch("app.agents.narrative_collection.llm_text_call", return_value="Noted.")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_full_narrative_is_segment_join(mock_json, mock_text):
-    mock_json.side_effect = [
-        {"done": True},
-        {"summary": "Summary.", "case_type": "unknown"},
-    ]
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+def test_full_narrative_is_segment_join(mock_json):
+    """full_narrative must be all segments joined with spaces."""
     segs = ["First part of narrative.", "Second part of narrative."]
     state = {**_asking_done_state(), "segments": segs}
     resp, _ = _call("No", state)
@@ -315,16 +278,13 @@ def test_done_intent_failure_still_completes(mock_json):
     On LLM failure in done_intent, default is not-done (collect utterance).
     Either way, the agent must complete — no loop.
     """
-    with patch("app.agents.narrative_collection.llm_text_call", return_value=""):
-        resp, _ = _call("No", _asking_done_state())
-    assert resp.status == AgentStatus.COMPLETED
-
-
-@patch("app.agents.narrative_collection.llm_text_call", return_value="")
-@patch("app.agents.narrative_collection.llm_json_call")
-def test_summarise_failure_uses_fallback(mock_json, mock_text):
-    mock_json.side_effect = [{"done": True}, Exception("summarise failed")]
     resp, _ = _call("No", _asking_done_state())
     assert resp.status == AgentStatus.COMPLETED
-    assert resp.collected["narrative_summary"]
-    assert resp.hidden_collected["case_type"]
+
+
+@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+def test_completed_contains_full_narrative(mock_json):
+    """On completion, full_narrative in hidden_collected must be non-empty."""
+    resp, _ = _call("No", _asking_done_state())
+    assert resp.status == AgentStatus.COMPLETED
+    assert resp.hidden_collected.get("full_narrative")

@@ -71,17 +71,29 @@ NEXUS_CONFIG = {
 }
 
 AGENT = IntakeQualificationAgent()
-HISTORY: list[dict] = []
 
 
 def _cfg(narrative_summary: str, case_type: str) -> dict:
-    return {
-        **NEXUS_CONFIG,
-        "_collected": {
-            "narrative_summary": narrative_summary,
-            "case_type": case_type,
+    """
+    Build config + a minimal history that contains the caller's narrative.
+
+    IntakeQualificationAgent now qualifies based on conversation history
+    (commit cd137c4), so the narrative must appear as a user turn in history.
+    """
+    history = [
+        {"role": "assistant", "content": "Could you please describe your legal matter?"},
+        {"role": "user",      "content": narrative_summary},
+    ]
+    return (
+        {
+            **NEXUS_CONFIG,
+            "_collected": {
+                "narrative_summary": narrative_summary,
+                "case_type": case_type,
+            },
         },
-    }
+        history,
+    )
 
 
 # ── Divorce scenarios — each must result in not_qualified / FAILED ─────────────
@@ -131,7 +143,8 @@ class TestDivorceCaseLiveQualification:
 
     @pytest.mark.parametrize("case", DIVORCE_CASES, ids=[c["label"] for c in DIVORCE_CASES])
     def test_divorce_is_always_not_qualified(self, case):
-        resp = AGENT.process("", {}, _cfg(case["narrative"], case["case_type"]), HISTORY)
+        cfg, history = _cfg(case["narrative"], case["case_type"])
+        resp = AGENT.process("", {}, cfg, history)
 
         decision = resp.hidden_collected.get("qualification_decision")
         reason = resp.hidden_collected.get("qualification_reason", "")
@@ -148,7 +161,8 @@ class TestDivorceCaseLiveQualification:
     @pytest.mark.parametrize("case", DIVORCE_CASES, ids=[c["label"] for c in DIVORCE_CASES])
     def test_divorce_refusal_message_is_spoken(self, case):
         """The agent must speak a polite refusal — never go silent."""
-        resp = AGENT.process("", {}, _cfg(case["narrative"], case["case_type"]), HISTORY)
+        cfg, history = _cfg(case["narrative"], case["case_type"])
+        resp = AGENT.process("", {}, cfg, history)
 
         assert resp.speak, f"[{case['label']}] Agent spoke nothing — refusal message is missing."
         speak_lower = resp.speak.lower()
@@ -181,7 +195,8 @@ class TestQualifiedCasesLive:
 
     @pytest.mark.parametrize("case", QUALIFIED_CASES, ids=[c["label"] for c in QUALIFIED_CASES])
     def test_in_scope_case_is_qualified(self, case):
-        resp = AGENT.process("", {}, _cfg(case["narrative"], case["case_type"]), HISTORY)
+        cfg, history = _cfg(case["narrative"], case["case_type"])
+        resp = AGENT.process("", {}, cfg, history)
 
         decision = resp.hidden_collected.get("qualification_decision")
         assert resp.status == AgentStatus.COMPLETED, (
@@ -211,8 +226,8 @@ def _run_all() -> int:
     print("═" * 70)
 
     for group_label, case, expected in all_cases:
-        cfg = _cfg(case["narrative"], case["case_type"])
-        resp = AGENT.process("", {}, cfg, HISTORY)
+        cfg, history = _cfg(case["narrative"], case["case_type"])
+        resp = AGENT.process("", {}, cfg, history)
         decision = resp.hidden_collected.get("qualification_decision", "?")
 
         if expected == "not_qualified":

@@ -28,7 +28,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from app.config import settings
 from app.agents.graph_config import APPOINTMENT_BOOKING
 from app.agents.workflow import WorkflowGraph
-from app.agents.router import Router
+from app.agents.planner import Planner
 from app.agents.registry import build_registry
 from app.agents.base import AgentStatus
 from app.services.config_client import get_cached_config
@@ -67,7 +67,7 @@ async def handle_call(
     notes_buffer: str = ""
     transcript_turns: list[dict] = []
 
-    router = Router(graph)
+    planner = Planner(graph)
     registry = build_registry(session.call_id, transcript_turns)
     utterance_lock = asyncio.Lock()
     consecutive_errors = [0]
@@ -274,18 +274,19 @@ async def handle_call(
                 )
                 return "", None
 
-            re_agent_id, _ = await loop.run_in_executor(
+            re_steps = await loop.run_in_executor(
                 None,
-                lambda: router.select(
-                    utterance, recent_history,
-                    hint=f"data_collection_unhandled:{reason}",
-                ),
+                lambda: planner.plan(utterance, recent_history),
+            )
+            re_agent_id = next(
+                (s.agent_id for s in re_steps if s.action == "invoke" and s.agent_id != agent_id),
+                None,
             )
 
-            if re_agent_id == agent_id:
-                # Router still wants the same agent — avoid infinite loop
+            if not re_agent_id or re_agent_id == agent_id:
+                # Planner could not find a different agent — avoid infinite loop
                 logger.warning(
-                    "Router re-selected %s after UNHANDLED — returning empty speak",
+                    "Planner found no alternative for UNHANDLED %s — returning empty speak",
                     agent_id,
                 )
                 return "", None
@@ -325,7 +326,7 @@ async def handle_call(
             )
             return speak, None
         if edge.target == "resume":
-            resume_id = router.pop_resume()
+            resume_id = planner.pop_resume()
             if resume_id:
                 resume_speak, finalize_reason = await _invoke_and_follow(
                     resume_id, "", current_turn, loop, recent_history, chain_depth + 1
@@ -388,54 +389,57 @@ async def handle_call(
         try:
             loop = asyncio.get_running_loop()
 
-            agent_id, interrupt = await loop.run_in_executor(
-                None, lambda: router.select(caller_text, recent_history)
+            # ── Planner: generate execution plan ─────────────────────────────
+            steps = await loop.run_in_executor(
+                None, lambda: planner.plan(caller_text, recent_history)
             )
 
-            # ── Parallel FAQ enrichment during narrative collection ────────────
-            # When the caller is mid-narrative and embeds a question, the router
-            # (after the prompt update) now correctly routes to narrative_collection.
-            # We simultaneously query the FAQ agent so any answerable question gets
-            # a real response. Both tasks run concurrently; the narrative agent's
-            # state update (segment accumulation) happens normally. The speak is
-            # replaced with a merged response: FAQ answer (if found) or a generic
-            # "taking note / team member will follow up" message.
-            narrative_state = graph.states.get("narrative_collection")
-            run_parallel_faq = (
-                agent_id == "narrative_collection"
-                and narrative_state is not None
-                and narrative_state.status == AgentStatus.IN_PROGRESS
-                and narrative_state.internal_state.get("stage") == "collecting"
-                and "?" in caller_text
-            )
+            # ── Execute each step in the plan ─────────────────────────────────
+            speaks: list[tuple[str, str]] = []   # (speak_text, agent_id) pairs
+            finalize_reason = None
+            agent_id = "unknown"
+            waiting_confirm_speak: str | None = None
 
-            if run_parallel_faq:
-                logger.info(
-                    "Parallel FAQ: narrative active + embedded question — running both concurrently"
-                )
-                (speak_text, finalize_reason), faq_speak = await asyncio.gather(
-                    _invoke_and_follow(
+            for step in steps:
+                if step.action == "reset_fields" and step.fields:
+                    # State mutation tool: clear fields from collected + agent state
+                    planner.reset_fields(step.fields, collected_all)
+
+                elif step.action == "invoke" and step.agent_id:
+                    agent_id = step.agent_id
+
+                    # Push active primary onto resume stack if this is an interrupt
+                    node = graph.nodes.get(agent_id)
+                    if node and node.interrupt_eligible:
+                        primary_id = planner.active_primary_for_resume()
+                        if primary_id:
+                            planner.push_resume(primary_id)
+
+                    step_speak, step_fr = await _invoke_and_follow(
                         agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
-                    ),
-                    _quick_faq_query(caller_text, recent_history, loop),
-                )
-                if faq_speak:
-                    speak_text = f"I've noted your matter. {faq_speak}"
-                    logger.info("Parallel FAQ: merged FAQ answer into narrative response")
-                else:
-                    speak_text = (
-                        "I'm taking note of your matter here. "
-                        "A team member will reach out to help you with "
-                        "any additional questions you may have."
                     )
-                    logger.info("Parallel FAQ: no FAQ match — using generic acknowledgement")
-            else:
-                speak_text, finalize_reason = await _invoke_and_follow(
-                    agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
-                )
-            # ── End parallel FAQ enrichment ───────────────────────────────────
+
+                    # WAITING_CONFIRM takes absolute priority — capture and stop
+                    agent_state = graph.states.get(agent_id)
+                    if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
+                        waiting_confirm_speak = step_speak
+                        if step_fr is not None:
+                            finalize_reason = step_fr
+                        break
+
+                    if step_speak:
+                        speaks.append((step_speak, agent_id))
+
+                    if step_fr is not None:
+                        finalize_reason = step_fr
+                        break  # farewell or completion — stop executing further steps
 
             consecutive_errors[0] = 0
+
+            if waiting_confirm_speak is not None:
+                speak_text = waiting_confirm_speak
+            else:
+                speak_text = planner.combine_speaks(speaks)
 
             if not speak_text or not speak_text.strip():
                 logger.warning("speak_text empty after full chain — using recovery phrase")

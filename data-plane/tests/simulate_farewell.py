@@ -19,7 +19,7 @@ from app.agents.farewell import FarewellAgent
 from app.agents.base import AgentStatus
 from app.agents.graph_config import APPOINTMENT_BOOKING
 from app.agents.workflow import WorkflowGraph
-from app.agents.router import Router
+from app.agents.planner import Planner
 
 
 # ── Shared config ─────────────────────────────────────────────────────────────
@@ -118,62 +118,73 @@ class TestFarewellGraphNode:
         assert "farewell" in graph.nodes
 
 
-# ── Simulation tests: router routing ─────────────────────────────────────────
+# ── Simulation tests: planner routing ────────────────────────────────────────
+
+def _first_invoke_agent(steps) -> str | None:
+    """Return the agent_id of the first invoke step in a plan."""
+    for step in steps:
+        if step.action == "invoke":
+            return step.agent_id
+    return None
+
 
 class TestFarewellRouting:
     """
-    These tests exercise the real LLM-based router to confirm it routes
-    farewell utterances to the `farewell` agent, not to data_collection or fallback.
+    These tests exercise the real LLM-based planner to confirm it plans
+    farewell utterances to invoke the `farewell` agent, not data_collection
+    or fallback.
     """
 
-    def _router(self):
+    def _planner(self):
         graph = WorkflowGraph(APPOINTMENT_BOOKING)
         from app.agents.base import AgentStatus
         graph.states["data_collection"].status = AgentStatus.IN_PROGRESS
-        return Router(graph), graph
+        return Planner(graph), graph
 
     def test_sim_bye_routes_to_farewell(self):
-        router, _ = self._router()
-        agent_id, _ = router.select("Bye!", [], )
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("Bye!", []))
         assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
 
     def test_sim_thank_you_bye_routes_to_farewell(self):
-        router, _ = self._router()
-        agent_id, _ = router.select("Thank you. Bye.", [])
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("Thank you. Bye.", []))
         assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
 
     def test_sim_thanks_so_much_routes_to_farewell(self):
-        router, _ = self._router()
-        agent_id, _ = router.select("Thanks so much, have a good day!", [])
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("Thanks so much, have a good day!", []))
         assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
 
     def test_sim_okay_thank_you_routes_to_farewell(self):
-        router, _ = self._router()
-        agent_id, _ = router.select("Okay. Thank you.", [])
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("Okay. Thank you.", []))
         assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
 
     def test_sim_goodbye_routes_to_farewell(self):
-        router, _ = self._router()
-        agent_id, _ = router.select("Goodbye!", [])
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("Goodbye!", []))
         assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
 
     def test_sim_providing_name_does_not_route_to_farewell(self):
         """'My name is John' should go to data_collection, not farewell."""
-        router, _ = self._router()
-        agent_id, _ = router.select("My name is John Smith.", [])
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("My name is John Smith.", []))
         assert agent_id != "farewell", f"Name utterance incorrectly routed to farewell"
 
     def test_sim_question_does_not_route_to_farewell(self):
         """'What are your fees?' should go to faq/fallback, not farewell."""
-        router, _ = self._router()
-        agent_id, _ = router.select("What are your fees?", [])
+        planner, _ = self._planner()
+        agent_id = _first_invoke_agent(planner.plan("What are your fees?", []))
         assert agent_id != "farewell", f"FAQ utterance incorrectly routed to farewell"
 
-    def test_sim_farewell_not_interrupt(self):
-        """Farewell should NOT be an interrupt — it terminates, not suspends."""
-        router, _ = self._router()
-        _, interrupt = router.select("Thank you, bye!", [])
-        assert interrupt is False, "Farewell should not set interrupt=True"
+    def test_sim_farewell_plan_has_single_step(self):
+        """Farewell plan should contain exactly one step — invoke farewell, nothing else."""
+        planner, _ = self._planner()
+        steps = planner.plan("Thank you, bye!", [])
+        invoke_steps = [s for s in steps if s.action == "invoke"]
+        assert len(invoke_steps) == 1, f"Farewell should produce exactly one invoke step, got {len(invoke_steps)}"
+        assert invoke_steps[0].agent_id == "farewell", f"Expected farewell, got {invoke_steps[0].agent_id!r}"
 
 
 # ── End-to-end simulation: farewell mid-intake ────────────────────────────────
@@ -183,10 +194,10 @@ class TestFarewellEndToEnd:
     def _setup(self):
         from app.agents.registry import build_registry
         graph = WorkflowGraph(APPOINTMENT_BOOKING)
-        router = Router(graph)
+        planner = Planner(graph)
         registry = build_registry("sim-farewell", [])
         graph.states["data_collection"].status = AgentStatus.IN_PROGRESS
-        return graph, router, registry
+        return graph, planner, registry
 
     def _invoke(self, agent_id, utterance, graph, registry, config, history):
         """Single synchronous agent invocation."""
@@ -198,16 +209,17 @@ class TestFarewellEndToEnd:
 
     def test_sim_farewell_mid_intake_completes(self):
         """Caller says bye while data_collection is still in progress."""
-        graph, router, registry = self._setup()
+        graph, planner, registry = self._setup()
 
         # Step 1: open with data_collection
         open_resp = self._invoke("data_collection", "", graph, registry, _CONFIG, [])
         assert open_resp.speak  # opening question asked
 
-        # Step 2: caller says goodbye
-        agent_id, _ = router.select("Okay, thank you. Bye!", [
+        # Step 2: caller says goodbye — planner should plan farewell
+        steps = planner.plan("Okay, thank you. Bye!", [
             {"role": "assistant", "content": open_resp.speak},
         ])
+        agent_id = _first_invoke_agent(steps)
         assert agent_id == "farewell"
 
         farewell_resp = self._invoke("farewell", "Okay, thank you. Bye!", graph, registry, _CONFIG, [])
@@ -221,17 +233,18 @@ class TestFarewellEndToEnd:
 
     def test_sim_farewell_after_booking_completes(self):
         """Caller says thank you after scheduling — call should end cleanly."""
-        graph, router, registry = self._setup()
+        graph, planner, registry = self._setup()
 
         # Mark scheduling as completed (simulates post-booking state)
         from app.agents.base import AgentStatus as AS
         for nid in ["data_collection", "narrative_collection", "intake_qualification", "scheduling"]:
             graph.states[nid].status = AS.COMPLETED
 
-        agent_id, _ = router.select("Thank you so much, goodbye!", [
+        steps = planner.plan("Thank you so much, goodbye!", [
             {"role": "assistant", "content": "Your meeting has been scheduled. We look forward to speaking with you!"},
             {"role": "user", "content": "Thank you so much, goodbye!"},
         ])
+        agent_id = _first_invoke_agent(steps)
         assert agent_id == "farewell"
 
         farewell_resp = self._invoke("farewell", "Thank you so much, goodbye!", graph, registry, _CONFIG, [])

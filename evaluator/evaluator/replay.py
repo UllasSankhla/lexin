@@ -35,7 +35,7 @@ from app.agents.farewell import FarewellAgent                       # noqa: E402
 from app.agents.scheduling import SchedulingAgent, _detect_confirmation  # noqa: E402
 from app.agents.graph_config import APPOINTMENT_BOOKING             # noqa: E402
 from app.agents.workflow import WorkflowGraph                       # noqa: E402
-from app.agents.router import Router                                # noqa: E402
+from app.agents.planner import Planner, PlanStep                    # noqa: E402
 from app.services.calendar_service import TimeSlot                  # noqa: E402
 import app.agents.scheduling as _sched_module                       # noqa: E402
 
@@ -134,7 +134,7 @@ def _invoke_and_follow(
     turn_idx: int,
     graph: WorkflowGraph,
     registry: dict,
-    router: Router,
+    planner: Planner,
     config: dict,
     collected: dict,
     transcript_turns: list[dict],
@@ -180,15 +180,19 @@ def _invoke_and_follow(
             if k not in collected:
                 collected[k] = v
 
-    # Handle UNHANDLED — re-route once
+    # Handle UNHANDLED — re-plan once with the planner
     if response.status == AgentStatus.UNHANDLED:
         reason = response.internal_state.get("cannot_process_reason", "unknown")
-        logger.info("Agent %s UNHANDLED (reason=%s) — re-routing", agent_id, reason)
+        logger.info("Agent %s UNHANDLED (reason=%s) — re-planning", agent_id, reason)
         if chain_depth < _MAX_CHAIN:
-            re_agent_id, _ = router.select(utterance, recent_history, hint=f"unhandled:{reason}")
-            if re_agent_id != agent_id:
+            re_steps = planner.plan(utterance, recent_history)
+            re_agent_id = next(
+                (s.agent_id for s in re_steps if s.action == "invoke" and s.agent_id != agent_id),
+                None,
+            )
+            if re_agent_id:
                 return _invoke_and_follow(
-                    re_agent_id, utterance, turn_idx, graph, registry, router,
+                    re_agent_id, utterance, turn_idx, graph, registry, planner,
                     config, collected, transcript_turns, chain_depth + 1,
                 )
         return "", None
@@ -204,10 +208,10 @@ def _invoke_and_follow(
         logger.warning("Edge chain depth %d exceeded at %s — stopping", chain_depth, agent_id)
         return speak, None
     if edge.target == "resume":
-        resume_id = router.pop_resume()
+        resume_id = planner.pop_resume()
         if resume_id:
             resume_speak, fr = _invoke_and_follow(
-                resume_id, "", turn_idx, graph, registry, router,
+                resume_id, "", turn_idx, graph, registry, planner,
                 config, collected, transcript_turns, chain_depth + 1,
             )
             return (speak + " " + resume_speak).strip(), fr
@@ -215,7 +219,7 @@ def _invoke_and_follow(
 
     # Follow edge to the next agent (auto-chain: narrative → qualification → scheduling)
     chain_speak, finalize_reason = _invoke_and_follow(
-        edge.target, "", turn_idx, graph, registry, router,
+        edge.target, "", turn_idx, graph, registry, planner,
         config, collected, transcript_turns, chain_depth + 1,
     )
     return (speak + " " + chain_speak).strip(), finalize_reason
@@ -231,9 +235,9 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
     actually processed (up to _MAX_TURNS).  No calendar API calls are made and
     no webhooks are fired.
     """
-    graph     = WorkflowGraph(APPOINTMENT_BOOKING)
-    router    = Router(graph)
-    registry  = _build_registry()
+    graph    = WorkflowGraph(APPOINTMENT_BOOKING)
+    planner  = Planner(graph)
+    registry = _build_registry()
     collected: dict       = {}
     transcript_turns: list[dict] = []
     replay_turns: list[ReplayTurn] = []
@@ -244,13 +248,13 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
         # Prime the pipeline: set data_collection IN_PROGRESS and get opening question.
         graph.states["data_collection"].status = AgentStatus.IN_PROGRESS
         opening_speak, _ = _invoke_and_follow(
-            "data_collection", "", 0, graph, registry, router,
+            "data_collection", "", 0, graph, registry, planner,
             config, collected, transcript_turns,
         )
         if opening_speak:
             transcript_turns.append({"role": "assistant", "content": opening_speak})
 
-        # Feed each caller turn through the pipeline.
+        # Feed each caller turn through the planner pipeline.
         for i, caller_turn in enumerate(test_case.caller_turns):
             if finalize_reason is not None or i >= _MAX_TURNS:
                 break
@@ -265,13 +269,52 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
             ]
 
             try:
-                # Check WAITING_CONFIRM enforcement (same as router.select does internally)
-                agent_id, interrupt = router.select(utterance, recent_history)
+                # Planner generates a multi-step execution plan
+                steps = planner.plan(utterance, recent_history)
 
-                speak_text, fr = _invoke_and_follow(
-                    agent_id, utterance, turn_idx, graph, registry, router,
-                    config, collected, transcript_turns,
-                )
+                speaks: list[tuple[str, str]] = []  # (speak_text, agent_id) pairs
+                fr: Optional[str] = None
+                agent_id = "unknown"
+                waiting_confirm_speak: Optional[str] = None
+
+                for step in steps:
+                    if step.action == "reset_fields" and step.fields:
+                        planner.reset_fields(step.fields, collected)
+
+                    elif step.action == "invoke" and step.agent_id:
+                        agent_id = step.agent_id
+
+                        # Push active primary onto resume stack for interrupt agents
+                        node = graph.nodes.get(agent_id)
+                        if node and node.interrupt_eligible:
+                            primary_id = planner.active_primary_for_resume()
+                            if primary_id:
+                                planner.push_resume(primary_id)
+
+                        step_speak, step_fr = _invoke_and_follow(
+                            agent_id, utterance, turn_idx, graph, registry, planner,
+                            config, collected, transcript_turns,
+                        )
+
+                        # WAITING_CONFIRM takes absolute priority — capture and stop
+                        agent_state = graph.states.get(agent_id)
+                        if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
+                            waiting_confirm_speak = step_speak
+                            if step_fr is not None:
+                                fr = step_fr
+                            break
+
+                        if step_speak:
+                            speaks.append((step_speak, agent_id))
+
+                        if step_fr is not None:
+                            fr = step_fr
+                            break
+
+                if waiting_confirm_speak is not None:
+                    speak_text = waiting_confirm_speak
+                else:
+                    speak_text = planner.combine_speaks(speaks)
 
                 if not speak_text or not speak_text.strip():
                     speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
@@ -282,7 +325,7 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
                     caller_utterance=utterance,
                     ai_response=speak_text,
                     agent_id=agent_id,
-                    agent_status=graph.states[agent_id].status.value,
+                    agent_status=graph.states[agent_id].status.value if agent_id in graph.states else "unknown",
                     turn_index=caller_turn.turn_index,
                 ))
 

@@ -37,7 +37,7 @@ import pytest
 
 from app.agents.graph_config import APPOINTMENT_BOOKING
 from app.agents.workflow import WorkflowGraph
-from app.agents.router import Router
+from app.agents.planner import Planner
 from app.agents.registry import build_registry
 from app.agents.base import AgentStatus
 
@@ -92,20 +92,24 @@ def _build_graph_mid_narrative() -> WorkflowGraph:
     return graph
 
 
-def _router_decision(utterance: str, history: list[dict] | None = None) -> tuple[str, bool, str]:
+def _router_decision(utterance: str, history: list[dict] | None = None) -> tuple[str, bool]:
     """
-    Run the router for a single utterance and return (agent_id, interrupt, reasoning).
+    Run the planner for a single utterance and return (agent_id, interrupt).
     A fresh graph is built for each call — tests are independent.
+    interrupt is True when the first step invokes an interrupt-eligible agent.
     """
     graph = _build_graph_mid_narrative()
-    router = Router(graph)
+    planner = Planner(graph)
     history = history or [
         {"role": "assistant", "content": "I'd like to understand your matter. Please go ahead."},
     ]
-    agent_id, interrupt = router.select(utterance, history)
-    # Retrieve last router reasoning from the graph state summary (not exposed directly,
-    # but we can re-read it from the router decision — reasoning is logged; we expose
-    # a simplified label for the simulation output).
+    steps = planner.plan(utterance, history)
+    first_invoke = next((s for s in steps if s.action == "invoke"), None)
+    if not first_invoke:
+        return "narrative_collection", False
+    agent_id = first_invoke.agent_id
+    node = graph.nodes.get(agent_id)
+    interrupt = bool(node and node.interrupt_eligible)
     return agent_id, interrupt
 
 

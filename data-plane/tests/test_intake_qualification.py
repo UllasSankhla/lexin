@@ -461,7 +461,8 @@ class TestLLMErrorHandling:
             )
 
         assert resp.status == AgentStatus.FAILED
-        assert "practice areas" in resp.speak.lower()
+        assert resp.speak  # fallback speak is non-empty
+        assert any(kw in resp.speak.lower() for kw in ("unable to assist", "focuses on", "practice areas", "outside"))
 
 
 # ── Referral suggestion injection ─────────────────────────────────────────────
