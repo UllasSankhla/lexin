@@ -291,17 +291,24 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
                 # Execute invoke steps sequentially (replay is sync; parallel-safe
                 # groups from the handler run in order here, which is functionally
                 # equivalent for evaluation purposes).
-                for step in invoke_steps:
+                for step_idx, step in enumerate(invoke_steps):
                     if fr is not None:
                         break
                     agent_id = step.agent_id
 
-                    # Push active primary onto resume stack for interrupt agents
+                    # Push active primary onto resume stack for interrupt agents,
+                    # but only when the primary is NOT already an explicit later
+                    # step — otherwise the resume edge would invoke it a second
+                    # time and duplicate the speak.
                     node = graph.nodes.get(agent_id)
                     if node and node.interrupt_eligible:
                         primary_id = planner.active_primary_for_resume()
                         if primary_id:
-                            planner.push_resume(primary_id)
+                            later_agent_ids = {
+                                s.agent_id for s in invoke_steps[step_idx + 1:]
+                            }
+                            if primary_id not in later_agent_ids:
+                                planner.push_resume(primary_id)
 
                     invoke_utterance = "" if getattr(step, "use_empty_utterance", False) else utterance
                     step_speak, step_fr = _invoke_and_follow(

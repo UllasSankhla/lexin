@@ -570,12 +570,16 @@ async def handle_call(
                     utt_a = "" if getattr(step_a, "use_empty_utterance", False) else caller_text
                     utt_b = "" if getattr(step_b, "use_empty_utterance", False) else caller_text
 
-                    # Set up resume stack for any interrupt-eligible agents
+                    # Set up resume stack for interrupt-eligible agents, but only
+                    # when the primary agent is NOT already an explicit step in
+                    # this group — otherwise the resume edge would invoke it a
+                    # second time and duplicate the speak.
+                    group_agent_ids = {s.agent_id for s in group}
                     for gs in group:
                         node = graph.nodes.get(gs.agent_id)
                         if node and node.interrupt_eligible:
                             primary_id = planner.active_primary_for_resume()
-                            if primary_id:
+                            if primary_id and primary_id not in group_agent_ids:
                                 planner.push_resume(primary_id)
 
                     results = await asyncio.gather(
@@ -618,12 +622,23 @@ async def handle_call(
                     # ── Sequential step ───────────────────────────────────────
                     step = group[0]
                     agent_id = step.agent_id
+                    group_idx = groups.index(group)
 
                     node = graph.nodes.get(agent_id)
                     if node and node.interrupt_eligible:
                         primary_id = planner.active_primary_for_resume()
                         if primary_id:
-                            planner.push_resume(primary_id)
+                            # Don't push to resume stack if a later planned step
+                            # already explicitly handles the primary agent — the
+                            # resume edge would otherwise invoke it a second time
+                            # and duplicate the speak.
+                            later_agent_ids = {
+                                s.agent_id
+                                for g in groups[group_idx + 1:]
+                                for s in g
+                            }
+                            if primary_id not in later_agent_ids:
+                                planner.push_resume(primary_id)
 
                     invoke_utterance = "" if getattr(step, "use_empty_utterance", False) else caller_text
                     step_speak, step_fr, step_conf = await _invoke_and_follow(
