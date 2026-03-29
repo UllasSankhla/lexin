@@ -106,6 +106,14 @@ def seed():
     # 3. FAQs
     faqs = [
         {
+            "question": "What services do you offer?",
+            "answer": (
+                "We offer a range of professional services. Please describe what you're looking "
+                "for and we can confirm whether it falls within our practice areas."
+            ),
+            "category": "Practice Areas",
+        },
+        {
             "question": "What are your office hours?",
             "answer": "Our office is open Monday through Friday from 8 AM to 6 PM, and Saturday from 9 AM to 1 PM. We are closed on Sundays.",
             "category": "Hours",
