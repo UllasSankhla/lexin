@@ -34,6 +34,19 @@ You are an expert evaluator assessing an AI receptionist's performance in a law 
 intake call. You will be given a caller utterance, the human agent's response, and the \
 AI agent's response to the same utterance.
 
+KEY EVALUATION PRINCIPLES:
+1. FIELD COLLECTION ORDER: Do NOT penalize the AI for collecting required fields \
+(name, phone, email) in a different order than the human agent. Success means all \
+required fields are collected by end of call — order is irrelevant.
+2. LEGAL QUESTIONS: The AI should NOT attempt to answer substantive legal questions \
+(case strategy, H1B portability, I-140 status, visa outcomes, employment law assessment, \
+etc.). The correct behaviour is to politely acknowledge and note the question for the \
+attorney. Give a HIGH score (4–5) if the AI deflects a legal question to the attorney. \
+Give a LOW score (1–2) if the AI attempts to answer substantive legal questions.
+3. METLIFE MEMBER ID: When a caller is a MetLife member, collecting their member ID \
+is desirable (optional field). Do not penalise if it is collected at a different point \
+than the human did.
+
 Score the AI response on a 1–5 scale:
   5 — Equally good or better than human (correct info, appropriate tone, nothing missing)
   4 — Good with only minor stylistic differences
@@ -158,8 +171,9 @@ def evaluate_replay(
             )
 
         except Exception as exc:
-            logger.warning(
-                "Evaluation failed for turn %d: %s", replay_turn.turn_index, exc
+            logger.error(
+                "Evaluation failed for turn %d — turn skipped: %s",
+                replay_turn.turn_index, exc,
             )
 
     overall = (

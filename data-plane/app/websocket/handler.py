@@ -36,6 +36,7 @@ from app.services.transcript_store import save_transcript
 from app.tools.base import ToolTrigger, ToolContext
 from app.tools.registry import resolve_tool
 from app.websocket.session import CallSession
+from app.agents.empathy_filter import apply_empathy_filter
 from app.websocket.state_machine import CallState
 from app.transport.base import BaseTransport
 from app.transport.voice_transport import VoiceTransport
@@ -224,9 +225,9 @@ async def handle_call(
         utterance: str,
         current_turn: int,
         loop,
-        recent_history: list[dict],
+        call_history: list[dict],
         chain_depth: int = 0,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, float]:
         MAX_CHAIN = 5
         await _await_pending_tools(agent_id)
 
@@ -248,7 +249,7 @@ async def handle_call(
                 utterance,
                 dict(agent_state.internal_state),
                 enriched_config,
-                recent_history,
+                call_history,
             )
         )
 
@@ -272,11 +273,11 @@ async def handle_call(
                     "UNHANDLED re-route skipped — MAX_CHAIN (%d) reached at %s",
                     MAX_CHAIN, agent_id,
                 )
-                return "", None
+                return "", None, 0.0
 
             re_steps = await loop.run_in_executor(
                 None,
-                lambda: planner.plan(utterance, recent_history),
+                lambda: planner.plan(utterance, call_history),
             )
             re_agent_id = next(
                 (s.agent_id for s in re_steps if s.action == "invoke" and s.agent_id != agent_id),
@@ -289,12 +290,25 @@ async def handle_call(
                     "Planner found no alternative for UNHANDLED %s — returning empty speak",
                     agent_id,
                 )
-                return "", None
+                return "", None, 0.0
 
-            re_speak, finalize_reason = await _invoke_and_follow(
-                re_agent_id, utterance, current_turn, loop, recent_history, chain_depth + 1
+            re_speak, finalize_reason, re_conf = await _invoke_and_follow(
+                re_agent_id, utterance, current_turn, loop, call_history, chain_depth + 1
             )
-            return re_speak, finalize_reason
+            # If the interrupted agent was data_collection with a pending
+            # confirmation, re-invoke it with an empty utterance so it re-surfaces
+            # the pending question and the graph is back in WAITING_CONFIRM.
+            # Without this the caller receives only the FAQ answer and "Yes" on
+            # the following turn is misread as a response to the FAQ.
+            if not finalize_reason and agent_id == "data_collection":
+                dc_state = graph.states.get("data_collection")
+                if dc_state and dc_state.internal_state.get("pending_confirmation"):
+                    dc_speak, dc_fr, dc_conf = await _invoke_and_follow(
+                        "data_collection", "", current_turn, loop, call_history, chain_depth + 1
+                    )
+                    combined = (re_speak + " " + dc_speak).strip()
+                    return combined, dc_fr, dc_conf
+            return re_speak, finalize_reason, re_conf
         # ── End UNHANDLED handling ─────────────────────────────────────────────
 
         edge = graph.get_edge(agent_id, response.status)
@@ -316,28 +330,104 @@ async def handle_call(
         speak = response.speak or ""
 
         if edge.target == "decider":
-            return speak, None
+            return speak, None, response.confidence
         if edge.target == "end":
-            return speak, edge.reason or "completed"
+            return speak, edge.reason or "completed", response.confidence
         if chain_depth >= MAX_CHAIN:
             logger.warning(
                 "Edge chain depth %d exceeded at agent=%s — stopping, target=%s",
                 chain_depth, agent_id, edge.target,
             )
-            return speak, None
+            return speak, None, response.confidence
         if edge.target == "resume":
             resume_id = planner.pop_resume()
             if resume_id:
-                resume_speak, finalize_reason = await _invoke_and_follow(
-                    resume_id, "", current_turn, loop, recent_history, chain_depth + 1
+                resume_speak, finalize_reason, resume_conf = await _invoke_and_follow(
+                    resume_id, "", current_turn, loop, call_history, chain_depth + 1
                 )
-                return (speak + " " + resume_speak).strip(), finalize_reason
-            return speak, None
+                return (speak + " " + resume_speak).strip(), finalize_reason, resume_conf
+            return speak, None, response.confidence
 
-        chain_speak, finalize_reason = await _invoke_and_follow(
-            edge.target, "", current_turn, loop, recent_history, chain_depth + 1
+        chain_speak, finalize_reason, chain_conf = await _invoke_and_follow(
+            edge.target, "", current_turn, loop, call_history, chain_depth + 1
         )
-        return (speak + " " + chain_speak).strip(), finalize_reason
+        return (speak + " " + chain_speak).strip(), finalize_reason, chain_conf
+
+    async def _invoke_parallel_both(
+        utterance: str,
+        current_turn: int,
+        loop,
+        call_history: list[dict],
+    ) -> tuple[str, str | None]:
+        """
+        Fix 5: Parallel invocation for BOTH utterances (field data + legal narrative).
+        Runs data_collection and narrative_collection concurrently; selects the best
+        response using confidence scores.
+        """
+        available_ids = {n.id for n in graph.available_nodes()}
+        tasks = []
+        agent_ids_parallel = []
+
+        if "data_collection" in available_ids:
+            tasks.append(_invoke_and_follow(
+                "data_collection", utterance, current_turn, loop, call_history
+            ))
+            agent_ids_parallel.append("data_collection")
+
+        if "narrative_collection" in available_ids:
+            tasks.append(_invoke_and_follow(
+                "narrative_collection", utterance, current_turn, loop, call_history
+            ))
+            agent_ids_parallel.append("narrative_collection")
+
+        if not tasks:
+            return "", None
+        if len(tasks) == 1:
+            speak, fr, _ = await tasks[0]
+            return speak, fr
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        valid: list[tuple[str, str | None, float, str]] = []
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                logger.warning("Parallel invocation of %s raised: %s", agent_ids_parallel[i], res)
+                continue
+            speak, fr, conf = res
+            valid.append((speak, fr, conf, agent_ids_parallel[i]))
+
+        if not valid:
+            return "", None
+
+        # If any agent triggered finalize, propagate it
+        for speak, fr, conf, aid in valid:
+            if fr is not None:
+                return speak, fr
+
+        # WAITING_CONFIRM always wins
+        for speak, fr, conf, aid in valid:
+            ag_state = graph.states.get(aid)
+            if ag_state and ag_state.status == AgentStatus.WAITING_CONFIRM:
+                return speak, fr
+
+        # Build confidence-aware speaks list and use combine_speaks
+        speaks_for_combine = [
+            (speak, aid, conf)
+            for speak, fr, conf, aid in valid
+            if speak.strip()
+        ]
+        if not speaks_for_combine:
+            return "", None
+        if len(speaks_for_combine) == 1:
+            return speaks_for_combine[0][0], None
+
+        combined = planner.combine_speaks(speaks_for_combine)
+        logger.info(
+            "Parallel BOTH invocation: agents=%s confs=%s",
+            [s[1] for s in speaks_for_combine],
+            [f"{s[2]:.2f}" for s in speaks_for_combine],
+        )
+        return combined, None
 
     async def _quick_faq_query(utterance: str, history: list[dict], loop) -> str | None:
         """
@@ -381,9 +471,9 @@ async def handle_call(
         turn_counter[0] += 1
         current_turn = turn_counter[0]
 
-        recent_history = [
+        call_history = [
             {"role": t["role"], "content": t["content"]}
-            for t in transcript_turns[-8:]
+            for t in transcript_turns
         ]
 
         try:
@@ -391,11 +481,34 @@ async def handle_call(
 
             # ── Planner: generate execution plan ─────────────────────────────
             steps = await loop.run_in_executor(
-                None, lambda: planner.plan(caller_text, recent_history)
+                None, lambda: planner.plan(caller_text, call_history)
             )
+            utt_class = planner.last_utterance_class
+
+            # ── Fix 5: Parallel invocation for BOTH utterances ────────────────
+            # When the caller's utterance contains both field data and legal
+            # narrative, run data_collection and narrative_collection in parallel
+            # and combine using confidence scores. Only applies when no
+            # WAITING_CONFIRM is active (Fix 4 handles that case via the planner).
+            if utt_class == "BOTH" and not graph.active_waiting_confirm():
+                speak_text, finalize_reason = await _invoke_parallel_both(
+                    caller_text, current_turn, loop, call_history
+                )
+                if not speak_text or not speak_text.strip():
+                    speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
+                speak_text = apply_empathy_filter(speak_text, collected_all, transcript_turns)
+                consecutive_errors[0] = 0
+                session.add_assistant_turn(speak_text)
+                transcript_turns.append({"role": "assistant", "content": speak_text})
+                audio_id = f"resp-{seq[0] + 1}"
+                await safe_send_text("server.response_text", {"text": speak_text, "audio_id": audio_id})
+                await transport.send_response(speak_text, audio_id)
+                if finalize_reason is not None:
+                    await _finalize_call(finalize_reason)
+                return
 
             # ── Execute each step in the plan ─────────────────────────────────
-            speaks: list[tuple[str, str]] = []   # (speak_text, agent_id) pairs
+            speaks: list[tuple[str, str, float]] = []  # (speak_text, agent_id, confidence)
             finalize_reason = None
             agent_id = "unknown"
             waiting_confirm_speak: str | None = None
@@ -415,20 +528,26 @@ async def handle_call(
                         if primary_id:
                             planner.push_resume(primary_id)
 
-                    step_speak, step_fr = await _invoke_and_follow(
-                        agent_id, caller_text, current_turn, loop, recent_history, chain_depth=0
+                    invoke_utterance = "" if getattr(step, "use_empty_utterance", False) else caller_text
+                    step_speak, step_fr, step_conf = await _invoke_and_follow(
+                        agent_id, invoke_utterance, current_turn, loop, call_history, chain_depth=0
                     )
 
                     # WAITING_CONFIRM takes absolute priority — capture and stop
                     agent_state = graph.states.get(agent_id)
                     if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
-                        waiting_confirm_speak = step_speak
+                        # Combine any prior speaks with the confirmation question
+                        if speaks:
+                            prior = planner.combine_speaks(speaks)
+                            waiting_confirm_speak = (prior + " " + step_speak).strip()
+                        else:
+                            waiting_confirm_speak = step_speak
                         if step_fr is not None:
                             finalize_reason = step_fr
                         break
 
                     if step_speak:
-                        speaks.append((step_speak, agent_id))
+                        speaks.append((step_speak, agent_id, step_conf))
 
                     if step_fr is not None:
                         finalize_reason = step_fr
@@ -444,6 +563,8 @@ async def handle_call(
             if not speak_text or not speak_text.strip():
                 logger.warning("speak_text empty after full chain — using recovery phrase")
                 speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
+
+            speak_text = apply_empathy_filter(speak_text, collected_all, transcript_turns)
 
             session.add_assistant_turn(speak_text)
             transcript_turns.append({"role": "assistant", "content": speak_text})
@@ -573,7 +694,7 @@ async def handle_call(
         # Opening — invoke data_collection with empty utterance to get first question
         loop = asyncio.get_running_loop()
         graph.states["data_collection"].status = AgentStatus.IN_PROGRESS
-        opening_speak, _ = await _invoke_and_follow(
+        opening_speak, _, _opening_conf = await _invoke_and_follow(
             "data_collection", "", 0, loop, [], chain_depth=0
         )
         opening_text = opening_speak or assistant_cfg.get("greeting_message", "Hello! How can I help you today?")

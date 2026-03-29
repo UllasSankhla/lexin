@@ -106,6 +106,7 @@ class NarrativeCollectionAgent(AgentBase):
                     status=AgentStatus.IN_PROGRESS,
                     speak="Is there anything else you'd like to add?",
                     internal_state=internal_state,
+                    confidence=0.9,
                 )
             # stage == "collecting" — first call has no segments yet, later calls are resumes
             if not segments:
@@ -116,6 +117,7 @@ class NarrativeCollectionAgent(AgentBase):
                 status=AgentStatus.IN_PROGRESS,
                 speak=prompt,
                 internal_state=internal_state,
+                confidence=0.9,
             )
 
         # ── Stage: asking_done — one response, then always complete ────────
@@ -133,6 +135,7 @@ class NarrativeCollectionAgent(AgentBase):
                 )
             # Complete regardless — we only ask once.
             return self._complete(segments, config, internal_state)
+
 
         # ── Stage: collecting — accumulate and check for completion ─────────
         segments.append(utterance)
@@ -154,6 +157,8 @@ class NarrativeCollectionAgent(AgentBase):
                 status=AgentStatus.IN_PROGRESS,
                 speak=speak,
                 internal_state=internal_state,
+                # High confidence: utterance clearly contained meaningful narrative
+                confidence=0.85,
             )
 
         # Still collecting — respond with a filler
@@ -161,10 +166,14 @@ class NarrativeCollectionAgent(AgentBase):
         llm_history.add("user", f'Caller said: "{utterance}"')
         llm_history.add("assistant", filler)
         internal_state["llm_history"] = llm_history.to_list()
+        # Confidence scales with utterance length — longer = more clearly narrative
+        word_count = len(utterance.split())
+        conf = 0.85 if word_count >= 10 else (0.65 if word_count >= 5 else 0.45)
         return SubagentResponse(
             status=AgentStatus.IN_PROGRESS,
             speak=filler,
             internal_state=internal_state,
+            confidence=conf,
         )
 
     # ── Private helpers ────────────────────────────────────────────────────
@@ -226,6 +235,7 @@ class NarrativeCollectionAgent(AgentBase):
                 "full_narrative": full_narrative,
             },
             internal_state=internal_state,
+            confidence=1.0,
         )
 
     def _pick_filler(self, segment_count: int) -> str:

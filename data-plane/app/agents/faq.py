@@ -10,7 +10,18 @@ logger = logging.getLogger(__name__)
 _MATCH_SYSTEM = (
     "You match a caller's question to a FAQ list. "
     "Return ONLY valid JSON: {\"matched\": true, \"index\": <0-based int>} "
-    "or {\"matched\": false} if no FAQ closely matches."
+    "or {\"matched\": false} if no FAQ closely matches.\n\n"
+    "IMPORTANT: If the question is about the caller's specific legal matter "
+    "(H1B portability, I-140 status, visa strategy, EAD renewals, employment law "
+    "case assessment, immigration law specifics, or any legal outcome question), "
+    "always return {\"matched\": false} — these must be handled by the attorney, not the FAQ."
+)
+
+_LEGAL_DEFLECT_SYSTEM = (
+    "Determine if the caller's question is a substantive legal question about their specific "
+    "matter (e.g. H1B portability, I-140/priority date, visa strategy, EAD renewals, "
+    "employment discrimination case assessment, immigration law specifics, legal outcomes). "
+    "Return ONLY valid JSON: {\"is_legal_question\": true} or {\"is_legal_question\": false}."
 )
 
 
@@ -22,6 +33,26 @@ class FAQAgent(AgentBase):
         config: dict,
         history: list[dict],
     ) -> SubagentResponse:
+        # Detect and deflect substantive legal questions before attempting FAQ match
+        try:
+            legal_check = llm_json_call(
+                _LEGAL_DEFLECT_SYSTEM,
+                f"Caller asked: \"{utterance}\"",
+            )
+            if legal_check.get("is_legal_question"):
+                speak = (
+                    "That's a great question for our legal team — I'll make sure to note it "
+                    "so the attorney can address it directly in your consultation."
+                )
+                logger.info("FAQAgent: deflecting legal question to attorney")
+                return SubagentResponse(
+                    status=AgentStatus.COMPLETED,
+                    speak=speak,
+                    internal_state=internal_state,
+                )
+        except Exception as exc:
+            logger.warning("FAQAgent legal check failed: %s", exc)
+
         faqs = config.get("faqs", [])
         if not faqs:
             return SubagentResponse(

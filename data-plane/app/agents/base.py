@@ -30,6 +30,10 @@ class SubagentResponse:
     booking: dict | None = None
     # Agent persists its own state here; router stores and passes back next turn
     internal_state: dict = field(default_factory=dict)
+    # Confidence score (0.0–1.0): how well this agent handled the utterance.
+    # Used by handler to select the best response when multiple agents are invoked.
+    # WAITING_CONFIRM responses always win regardless of confidence.
+    confidence: float = 1.0
 
 
 class AgentBase(ABC):

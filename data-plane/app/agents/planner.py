@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Literal
 
 from app.agents.base import AgentStatus
 from app.agents.llm_utils import llm_json_call
@@ -43,6 +44,89 @@ _ANSWER_AGENTS = {"faq", "context_docs", "fallback"}
 _EMPATHY_AGENTS = {"empathy"}
 
 
+# ── Pre-routing utterance classification ──────────────────────────────────────
+
+UtteranceClass = Literal["FIELD_DATA", "LEGAL_NARRATIVE", "BOTH", "CONTROL"]
+
+_CLASSIFY_SYSTEM = """\
+You are a pre-routing classifier for a voice intake assistant at a law firm.
+
+Your sole job: given the caller's latest utterance and the last few turns of conversation,
+classify the utterance into exactly ONE of these four categories:
+
+FIELD_DATA     — The caller is providing structured contact or intake information:
+                 name, phone number, email address, physical address, employer name,
+                 job title, member ID, date, or any other specific data field.
+                 Includes spelled-out values, partial values, and corrections to fields.
+                 Examples: "My name is Sarah Chen", "It's 415-555-0192",
+                 "sarah dot chen at gmail dot com", "VW3R9KJ2", "I work at Microsoft"
+
+LEGAL_NARRATIVE — The caller is describing their legal situation, matter, or circumstances.
+                 Includes describing what happened, their current legal status, concerns,
+                 questions about their case, or any free-form account of their issue.
+                 Examples: "I was in a car accident last month",
+                 "I'm on an H1B and my employer is hinting at layoffs",
+                 "Nothing formal yet, just verbal hints, I want to know my options"
+
+BOTH           — The utterance contains BOTH structured field data AND legal narrative.
+                 Examples: "My name is Kavita Sharma and I have an H1B visa issue",
+                 "I need help with an employment matter, I'm Marcus Rivera at microsoft"
+
+CONTROL        — A short yes/no/confirmation/correction/stop signal with no new information.
+                 Examples: "Yes", "No", "That's correct", "Yes that's right",
+                 "Actually no", "Stop", "Cancel", "Goodbye"
+
+Rules:
+- Use the conversation history to understand context. A short utterance like
+  "Nothing formal yet" is LEGAL_NARRATIVE if the prior turns show the caller
+  was describing a legal matter.
+- When the caller provides any specific data value (ID, number, name, email) AND
+  describes their situation in the same utterance, classify as BOTH.
+- Default to FIELD_DATA when unsure — it is the safer fallback.
+
+Respond with ONLY valid JSON: {"class": "FIELD_DATA"} (or LEGAL_NARRATIVE, BOTH, CONTROL)
+No explanation, no other keys.
+"""
+
+
+def classify_utterance(utterance: str, recent_history: list[dict] | None = None) -> UtteranceClass:
+    """
+    LLM-based pre-routing classification with conversation history context.
+
+    Uses the last 4 turns of history so ambiguous short utterances (e.g.
+    "Nothing formal yet") are classified correctly based on what came before.
+
+    Returns one of: FIELD_DATA | LEGAL_NARRATIVE | BOTH | CONTROL
+
+    Falls back to FIELD_DATA on any error — safe default since data_collection
+    handles unrecognised utterances via its CANNOT_PROCESS path.
+    """
+    # Build a compact history block (last 4 turns only)
+    history_block = ""
+    if recent_history:
+        last_turns = recent_history[-4:]
+        lines = []
+        for t in last_turns:
+            role = "Caller" if t.get("role") == "user" else "Assistant"
+            content = (t.get("content") or "")[:200]
+            lines.append(f"{role}: {content}")
+        if lines:
+            history_block = "RECENT CONVERSATION:\n" + "\n".join(lines) + "\n\n"
+
+    user_msg = f'{history_block}CALLER JUST SAID: "{utterance}"\n\nClassify this utterance.'
+
+    try:
+        result = llm_json_call(_CLASSIFY_SYSTEM, user_msg, max_tokens=32)
+        raw = result.get("class", "FIELD_DATA")
+        if raw in ("FIELD_DATA", "LEGAL_NARRATIVE", "BOTH", "CONTROL"):
+            return raw  # type: ignore[return-value]
+        logger.warning("classify_utterance: unexpected class %r — defaulting to FIELD_DATA", raw)
+        return "FIELD_DATA"
+    except Exception as exc:
+        logger.warning("classify_utterance LLM call failed: %s — defaulting to FIELD_DATA", exc)
+        return "FIELD_DATA"
+
+
 # ── Plan models ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -52,6 +136,7 @@ class PlanStep:
     agent_id: str | None = None     # target agent for "invoke"
     fields: list[str] | None = None # field keys to clear for "reset_fields"
     reason: str = ""                # planner's stated reasoning (logged)
+    use_empty_utterance: bool = False  # invoke with "" instead of caller_text (re-surface pending)
 
 
 # ── Planner system prompt ──────────────────────────────────────────────────────
@@ -88,7 +173,13 @@ NEW_TOPIC       — Caller changes subject or asks an unrelated question.
 NARRATIVE       — Caller is describing their legal situation for the first time.
                   e.g. "I was in a car accident last month..."
 
-FAREWELL        — Caller is ending the call: thanks, goodbye, have a good day, etc.
+FAREWELL        — Caller is clearly ending the call after all goals are complete.
+                  e.g. "Goodbye!", "Thanks, have a great day!", "Talk to you then, bye!"
+                  NOT farewell: "That would be great, thank you" (accepting a slot offer mid-call)
+                  NOT farewell: "Sounds good" or "Perfect" mid-conversation
+                  NOT farewell: any gratitude expressed while scheduling is still in progress.
+                  Use FAREWELL only when no primary goals remain (scheduling complete or not needed)
+                  AND the caller is clearly signing off.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AVAILABLE ACTIONS
@@ -105,7 +196,11 @@ AVAILABLE ACTIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2: PLANNING RULES (check in order)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. FAREWELL — If utterance_type=FAREWELL, plan ONLY: [invoke("farewell")].
+1. FAREWELL — If utterance_type=FAREWELL AND no primary goals are still in progress
+   (i.e. scheduling has COMPLETED or "scheduling" is not in AVAILABLE AGENTS), plan
+   ONLY: [invoke("farewell")].
+   If scheduling is still in progress (stage not done), treat the utterance as a
+   DIRECT_ANSWER to the scheduling agent instead — do NOT invoke farewell mid-booking.
 
 2. EMPATHY — If utterance_type=NARRATIVE and "empathy" is in AVAILABLE AGENTS
    (meaning it has not yet been used this call), prepend an empathy step:
@@ -146,6 +241,11 @@ CONSTRAINTS
 - Always include at least one invoke step.
 - Only use agents listed in AVAILABLE AGENTS.
 - reset_fields must always be immediately followed by invoke("data_collection").
+- Use the UTTERANCE CLASS pre-routing signal as a strong prior:
+  LEGAL_NARRATIVE → prefer narrative_collection over data_collection.
+  FIELD_DATA → prefer data_collection.
+  BOTH → invoke data_collection then narrative_collection (or empathy first if available).
+  CONTROL → short yes/no — follow PENDING CONFIRM and DIRECT_ANSWER rules.
 
 Respond ONLY with valid JSON:
 {
@@ -189,6 +289,7 @@ class Planner:
     def __init__(self, graph: WorkflowGraph) -> None:
         self._graph = graph
         self._resume_stack: list[str] = []
+        self.last_utterance_class: UtteranceClass = "FIELD_DATA"
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -209,11 +310,42 @@ class Planner:
         """
         graph = self._graph
 
-        # Hard enforcement: WAITING_CONFIRM bypasses planning entirely.
+        # Pre-routing classification — LLM call with last 4 turns of history.
+        utt_class = classify_utterance(utterance, recent_history)
+        self.last_utterance_class = utt_class
+
+        # WAITING_CONFIRM enforcement — relaxed for LEGAL_NARRATIVE utterances.
+        # For field data and control signals, keep the hard bypass.
+        # For legal narratives, route to narrative_collection first so the caller
+        # can share their story, then re-surface the pending confirmation.
         waiting_id = graph.active_waiting_confirm()
         if waiting_id:
-            logger.info("Planner: WAITING_CONFIRM enforced → %s (LLM bypassed)", waiting_id)
-            return [PlanStep(action="invoke", agent_id=waiting_id, reason="waiting_confirm")]
+            if utt_class == "LEGAL_NARRATIVE":
+                available_ids = {n.id for n in graph.available_nodes()}
+                steps: list[PlanStep] = []
+                if "narrative_collection" in available_ids:
+                    steps.append(PlanStep(
+                        action="invoke",
+                        agent_id="narrative_collection",
+                        reason="narrative_before_confirm",
+                    ))
+                steps.append(PlanStep(
+                    action="invoke",
+                    agent_id=waiting_id,
+                    reason="waiting_confirm_follow_up",
+                    use_empty_utterance=True,
+                ))
+                logger.info(
+                    "Planner: WAITING_CONFIRM active but LEGAL_NARRATIVE — "
+                    "routing narrative_collection first, then %s", waiting_id,
+                )
+                return steps
+            else:
+                logger.info(
+                    "Planner: WAITING_CONFIRM enforced → %s (class=%s, LLM bypassed)",
+                    waiting_id, utt_class,
+                )
+                return [PlanStep(action="invoke", agent_id=waiting_id, reason="waiting_confirm")]
 
         available = graph.available_nodes()
         if not available:
@@ -284,6 +416,10 @@ class Planner:
             f"BOOKING STAGES:\n{booking_block}\n\n"
             f"CONVERSATION HISTORY (most recent last):\n{history_lines}\n"
             f"{last_ai_line}\n"
+            f"UTTERANCE CLASS (pre-routing signal): {utt_class}\n"
+            f"  FIELD_DATA=structured contact data, LEGAL_NARRATIVE=legal situation description,\n"
+            f"  BOTH=contains both, CONTROL=short yes/no/stop signal\n"
+            f"  Use this as a strong prior when deciding between data_collection and narrative_collection.\n\n"
             f'CALLER JUST SAID: "{utterance}"\n\n'
             "Classify the utterance and create an execution plan. Reply JSON only."
         )
@@ -335,21 +471,18 @@ class Planner:
             logger.error("Planner LLM call failed: %s — using fallback plan", exc)
             return self._fallback_plan(available_ids)
 
-    def combine_speaks(self, speaks: list[tuple[str, str]]) -> str:
+    def combine_speaks(self, speaks: list[tuple[str, str, float]]) -> str:
         """
         Intelligently combine speaks from multiple agents into a single response.
 
-        speaks: list of (speak_text, agent_id) pairs in execution order.
+        speaks: list of (speak_text, agent_id, confidence) triples in execution order.
 
-        Combination rules:
-        - Single speak: return as-is.
-        - FAQ/fallback/context_docs answer + data_collection question:
-            "{answer} {question}"  (answer the question, then re-ask)
-        - narrative filler + data_collection question:
-            just the data_collection question (narrative filler is not needed)
-        - data_collection + narrative filler:
-            just the data_collection speak
-        - Multiple information speaks: join with a space.
+        Combination rules (checked in order):
+        1. Single speak: return as-is.
+        2. Named agent-type rules (empathy, answer+data, filler+data, etc.).
+        3. Confidence-based selection: if one agent has confidence > other by 0.3+,
+           prefer the higher-confidence speak (for parallel BOTH invocations).
+        4. General: join all non-empty speaks with a space.
         """
         if not speaks:
             return ""
@@ -361,8 +494,8 @@ class Planner:
 
         # Two speaks: apply smart rules
         if len(speaks) == 2:
-            a_text, a_id = speaks[0]
-            b_text, b_id = speaks[1]
+            a_text, a_id, a_conf = speaks[0]
+            b_text, b_id, b_conf = speaks[1]
 
             # Empathy acknowledgment + any agent: empathy first, then other speak
             if a_id in _EMPATHY_AGENTS:
@@ -388,6 +521,17 @@ class Planner:
             # data_collection + narrative filler: use data speak
             if a_id == "data_collection" and b_id in _FILLER_AGENTS:
                 return a_text
+
+            # Confidence tiebreaker for parallel invocations (e.g. BOTH utterances):
+            # if one agent is clearly more confident, use its speak
+            if abs(a_conf - b_conf) > 0.3:
+                winner_text = a_text if a_conf > b_conf else b_text
+                winner_id = a_id if a_conf > b_conf else b_id
+                logger.debug(
+                    "combine_speaks: confidence winner=%s (%.2f vs %.2f)",
+                    winner_id, max(a_conf, b_conf), min(a_conf, b_conf),
+                )
+                return winner_text
 
         # General: join all non-empty speaks
         combined = " ".join(t.strip() for t in texts if t.strip())

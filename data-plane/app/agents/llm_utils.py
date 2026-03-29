@@ -7,6 +7,8 @@ import re
 import time
 from typing import TYPE_CHECKING
 
+import anthropic
+import openai as openai_sdk
 from cerebras.cloud.sdk import Cerebras
 from app.config import settings
 from app.pipeline.llm import _call_with_retry  # reuse retry logic
@@ -16,14 +18,57 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_client: Cerebras | None = None
+_client = None
+_client_provider: str | None = None
 
 
-def _get_client() -> Cerebras:
-    global _client
-    if _client is None:
-        _client = Cerebras(api_key=settings.cerebras_api_key)
+def _get_client():
+    global _client, _client_provider
+    provider = settings.llm_provider
+    if _client is None or _client_provider != provider:
+        if provider == "anthropic":
+            _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        elif provider == "openai":
+            _client = openai_sdk.OpenAI(api_key=settings.openai_api_key)
+        else:
+            _client = Cerebras(api_key=settings.cerebras_api_key)
+        _client_provider = provider
     return _client
+
+
+def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, temperature: float) -> str:
+    """Route a chat completion through the configured provider and return content text."""
+    provider = settings.llm_provider
+    client = _get_client()
+    if provider == "anthropic":
+        response = _call_with_retry(
+            client,
+            model=settings.anthropic_model,
+            system=system_prompt,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return response.content[0].text if response.content else ""
+    elif provider == "openai":
+        full_messages = [{"role": "system", "content": system_prompt}] + messages
+        response = _call_with_retry(
+            client,
+            model=settings.openai_model,
+            messages=full_messages,
+            max_completion_tokens=max_tokens,
+        )
+        return response.choices[0].message.content if response.choices else ""
+    else:
+        full_messages = [{"role": "system", "content": system_prompt}] + messages
+        response = _call_with_retry(
+            client,
+            model=settings.cerebras_model,
+            messages=full_messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return response.choices[0].message.content if response.choices else ""
 
 
 # ── Conversation history ──────────────────────────────────────────────────────
@@ -83,12 +128,11 @@ class ConversationHistory:
 # ── LLM call helpers ──────────────────────────────────────────────────────────
 
 def _build_messages(
-    system_prompt: str,
     user_message: str,
     history: ConversationHistory | None,
 ) -> list[dict]:
-    """Assemble the messages list: system → history turns → current user turn."""
-    msgs: list[dict] = [{"role": "system", "content": system_prompt}]
+    """Assemble the user/assistant messages list (system prompt is passed separately)."""
+    msgs: list[dict] = []
     if history:
         msgs.extend(history.messages())
     msgs.append({"role": "user", "content": user_message})
@@ -107,16 +151,9 @@ def llm_json_call(
     All agents and the router use this.
     """
     t0 = time.monotonic()
-    response = _call_with_retry(
-        _get_client(),
-        model=settings.cerebras_model,
-        messages=_build_messages(system_prompt, user_message, history),
-        max_tokens=max_tokens,
-        temperature=0.2,
-    )
+    content = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.2)
     latency_ms = (time.monotonic() - t0) * 1000
 
-    content = response.choices[0].message.content if response.choices else None
     if not content:
         logger.error("llm_json_call received empty/None content from LLM")
         raise ValueError("LLM returned empty content")
@@ -165,25 +202,38 @@ def llm_structured_call(
 ) -> object:
     """
     Single LLM call that returns a validated Pydantic model instance.
-    Uses response_format=json_object for structured output where supported,
-    then validates the result against the given Pydantic model.
+
+    For OpenAI: uses client.beta.chat.completions.parse to enforce the schema.
+    For Anthropic/Cerebras: parses JSON from the response text and validates it.
     Raises ValueError if parsing or validation fails.
     """
-    # Note: response_format=json_object is intentionally NOT used here.
-    # Cerebras truncates or returns empty content when JSON mode is forced.
-    # The system prompt already instructs the model to return JSON only;
-    # Pydantic validates the result structurally.
     t0 = time.monotonic()
-    response = _call_with_retry(
-        _get_client(),
-        model=settings.cerebras_model,
-        messages=_build_messages(system_prompt, user_message, history),
-        max_tokens=max_tokens,
-        temperature=0.1,
-    )
+    provider = settings.llm_provider
 
+    if provider == "openai":
+        # Use json_object mode to guarantee valid JSON, then validate with Pydantic
+        client = _get_client()
+        messages = [{"role": "system", "content": system_prompt}] + _build_messages(user_message, history)
+        response = _call_with_retry(
+            client,
+            model=settings.openai_model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            max_completion_tokens=max_tokens,
+        )
+        latency_ms = (time.monotonic() - t0) * 1000
+        content = response.choices[0].message.content if response.choices else None
+        if not content:
+            raise ValueError("LLM returned empty content")
+        try:
+            return response_model.model_validate_json(content)
+        except Exception as exc:
+            logger.error("llm_structured_call (openai) validation failed: %s | raw=%r", exc, content[:300])
+            raise ValueError(f"LLM structured response validation failed: {exc}") from exc
+
+    content = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.1)
     latency_ms = (time.monotonic() - t0) * 1000
-    content = response.choices[0].message.content if response.choices else None
+
     if not content:
         raise ValueError("LLM returned empty content")
 
@@ -214,15 +264,8 @@ def llm_text_call(
 ) -> str:
     """Single LLM call returning plain text. Used for speak generation."""
     t0 = time.monotonic()
-    response = _call_with_retry(
-        _get_client(),
-        model=settings.cerebras_model,
-        messages=_build_messages(system_prompt, user_message, history),
-        max_tokens=max_tokens,
-        temperature=0.3,
-    )
+    content = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.3)
     latency_ms = (time.monotonic() - t0) * 1000
-    content = response.choices[0].message.content if response.choices else None
     if not content:
         logger.error("llm_text_call received empty/None content from LLM")
         return ""

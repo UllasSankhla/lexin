@@ -1,4 +1,4 @@
-"""Cerebras LLM integration with dynamic prompt construction."""
+"""LLM integration — supports Anthropic Claude and Cerebras (switchable via LLM_PROVIDER)."""
 from __future__ import annotations
 
 import logging
@@ -11,22 +11,29 @@ from typing import TYPE_CHECKING, Optional
 # Beyond 6 retries (~1.6 s total wait) we've waited long enough for a sync response.
 _RETRY_DELAYS = tuple(0.025 * (2 ** i) for i in range(6))  # (0.025, 0.05, 0.1, 0.2, 0.4, 0.8)
 
+import anthropic
+import openai as openai_sdk
 from cerebras.cloud.sdk import Cerebras
 
 from app.config import settings
 
 
-def _call_with_retry(client: Cerebras, **kwargs) -> object:
+def _call_with_retry(client, **kwargs) -> object:
     """
-    Call client.chat.completions.create with exponential-backoff retries.
+    Call the LLM client with exponential-backoff retries.
 
-    Uses _RETRY_DELAYS so all Cerebras calls share the same retry policy.
+    Routes to client.messages.create (Anthropic) or client.chat.completions.create
+    (OpenAI / Cerebras) based on client type.
     Raises the last exception if all retries are exhausted.
     """
+    use_anthropic = isinstance(client, anthropic.Anthropic)
     last_exc: Exception | None = None
     for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
         try:
-            return client.chat.completions.create(**kwargs)
+            if use_anthropic:
+                return client.messages.create(**kwargs)
+            else:
+                return client.chat.completions.create(**kwargs)
         except Exception as exc:
             last_exc = exc
             if delay is None:
@@ -115,12 +122,26 @@ def build_system_prompt(config: dict) -> str:
 
 
 class LLMClient:
-    """Synchronous wrapper around Cerebras API (run in executor for async use)."""
+    """Synchronous wrapper around the configured LLM provider (run in executor for async use)."""
 
     def __init__(self, system_prompt: str):
-        self._client = Cerebras(api_key=settings.cerebras_api_key)
+        self._provider = settings.llm_provider
+        if self._provider == "anthropic":
+            self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            self._model = settings.anthropic_model
+            self._max_tokens = settings.anthropic_max_tokens
+            self._temperature = settings.anthropic_temperature
+        elif self._provider == "openai":
+            self._client = openai_sdk.OpenAI(api_key=settings.openai_api_key)
+            self._model = settings.openai_model
+            self._max_tokens = settings.openai_max_tokens
+            self._temperature = settings.openai_temperature
+        else:
+            self._client = Cerebras(api_key=settings.cerebras_api_key)
+            self._model = settings.cerebras_model
+            self._max_tokens = settings.cerebras_max_tokens
+            self._temperature = settings.cerebras_temperature
         self._system_prompt = system_prompt
-        self._model = settings.cerebras_model
 
     def complete(
         self,
@@ -135,34 +156,50 @@ class LLMClient:
         if extra_system_note:
             system_content += f"\n\n[SYSTEM NOTE]: {extra_system_note}"
 
-        messages = [{"role": "system", "content": system_content}] + conversation_history
-
         # ── Request logging ───────────────────────────────────────────────────
         logger.info(
-            "LLM request | model=%s turns=%d%s",
+            "LLM request | provider=%s model=%s turns=%d%s",
+            self._provider,
             self._model,
             len(conversation_history),
             f" extra_note={extra_system_note!r}" if extra_system_note else "",
         )
-        logger.debug("LLM system prompt | %s", system_content[:300])
-        for i, msg in enumerate(conversation_history):
-            logger.debug(
-                "LLM message[%d] | role=%s content=%r",
-                i, msg["role"], msg["content"][:200],
-            )
 
         t0 = time.monotonic()
-        response = _call_with_retry(
-            self._client,
-            model=self._model,
-            messages=messages,
-            max_tokens=settings.cerebras_max_tokens,
-            temperature=settings.cerebras_temperature,
-        )
+        if self._provider == "anthropic":
+            messages = [m for m in conversation_history if m.get("role") in ("user", "assistant")]
+            response = _call_with_retry(
+                self._client,
+                model=self._model,
+                system=system_content,
+                messages=messages,
+                max_tokens=self._max_tokens,
+                temperature=self._temperature,
+            )
+            text = response.content[0].text.strip() if response.content else ""
+            tokens = (response.usage.input_tokens + response.usage.output_tokens) if response.usage else 0
+        elif self._provider == "openai":
+            messages = [{"role": "system", "content": system_content}] + conversation_history
+            response = _call_with_retry(
+                self._client,
+                model=self._model,
+                messages=messages,
+                max_completion_tokens=self._max_tokens,
+            )
+            text = response.choices[0].message.content.strip()
+            tokens = (response.usage.completion_tokens or 0) + (response.usage.prompt_tokens or 0) if response.usage else 0
+        else:
+            messages = [{"role": "system", "content": system_content}] + conversation_history
+            response = _call_with_retry(
+                self._client,
+                model=self._model,
+                messages=messages,
+                max_tokens=self._max_tokens,
+                temperature=self._temperature,
+            )
+            text = response.choices[0].message.content.strip()
+            tokens = response.usage.total_tokens if response.usage else 0
         latency_ms = (time.monotonic() - t0) * 1000
-
-        text = response.choices[0].message.content.strip()
-        tokens = response.usage.total_tokens if response.usage else 0
 
         # ── Response logging ──────────────────────────────────────────────────
         logger.info(

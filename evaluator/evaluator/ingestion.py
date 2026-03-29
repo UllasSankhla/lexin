@@ -234,21 +234,23 @@ def build_test_case(raw: RawConversation) -> TestCase:
         else:
             collapsed.append(turn)
 
-    caller_turns = [
-        CallerTurn(text=t.text, turn_index=t.turn_index)
-        for t in collapsed if t.speaker == "caller"
-    ]
+    # caller_turns will be built from paired after re-indexing (below).
+    # human_agent_turns keeps original collapsed indices (used only for reference).
     human_agent_turns = [
         AgentTurn(text=t.text, turn_index=t.turn_index)
         for t in collapsed if t.speaker == "agent"
     ]
 
-    # Pair each caller turn with the agent turn that follows it (if any)
+    # Pair each caller turn with the agent turn that follows it (if any).
+    # Use sequential 1-based caller turn indices so evaluation logs show
+    # 1, 2, 3, ... regardless of how many agent turns precede the first caller.
     paired: list[tuple[CallerTurn, AgentTurn]] = []
+    caller_seq = 0
     turn_iter = iter(collapsed)
     for turn in turn_iter:
         if turn.speaker == "caller":
-            caller_t = CallerTurn(text=turn.text, turn_index=turn.turn_index)
+            caller_seq += 1
+            caller_t = CallerTurn(text=turn.text, turn_index=caller_seq)
             # Find next agent turn
             for nxt in turn_iter:
                 if nxt.speaker == "agent":
@@ -257,6 +259,10 @@ def build_test_case(raw: RawConversation) -> TestCase:
             else:
                 # No following agent turn
                 paired.append((caller_t, AgentTurn(text="", turn_index=-1)))
+
+    # Derive caller_turns from the sequentially-indexed paired list so that
+    # caller_turns[i].turn_index == i+1 and replay.py uses the same indices.
+    caller_turns = [ct for ct, _ in paired]
 
     conv_id = Path(raw.source_file).stem
     logger.info(

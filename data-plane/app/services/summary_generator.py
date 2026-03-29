@@ -1,5 +1,7 @@
-"""Generate post-call AI summary and extract caller name using Cerebras."""
+"""Generate post-call AI summary and extract caller name via configured LLM provider."""
 import logging
+import anthropic
+import openai as openai_sdk
 from cerebras.cloud.sdk import Cerebras
 
 from app.config import settings
@@ -56,26 +58,46 @@ def generate_call_summary(
     # Build condensed transcript (limit to avoid token overflow)
     transcript_text = "\n".join(transcript_lines[-40:])  # last 40 lines
 
-    client = Cerebras(api_key=settings.cerebras_api_key)
+    provider = settings.llm_provider
+    if provider == "anthropic":
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        model = settings.anthropic_model
+    elif provider == "openai":
+        client = openai_sdk.OpenAI(api_key=settings.openai_api_key)
+        model = settings.openai_model
+    else:
+        client = Cerebras(api_key=settings.cerebras_api_key)
+        model = settings.cerebras_model
+
+    def _complete(system: str, user: str, temperature: float = 0.3) -> str:
+        if provider == "anthropic":
+            r = _call_with_retry(client, model=model, system=system,
+                                 messages=[{"role": "user", "content": user}],
+                                 max_tokens=1024, temperature=temperature)
+            return r.content[0].text.strip() if r.content else ""
+        elif provider == "openai":
+            r = _call_with_retry(client, model=model,
+                                 messages=[{"role": "system", "content": system},
+                                           {"role": "user", "content": user}],
+                                 max_completion_tokens=1024)
+            return r.choices[0].message.content.strip() if r.choices else ""
+        else:
+            r = _call_with_retry(client, model=model,
+                                 messages=[{"role": "system", "content": system},
+                                           {"role": "user", "content": user}],
+                                 max_tokens=1024, temperature=temperature)
+            return r.choices[0].message.content.strip() if r.choices else ""
 
     # If no name found from collected params, try extracting it from the transcript
     if not caller_name:
         try:
-            name_response = _call_with_retry(
-                client,
-                model=settings.cerebras_model,
-                messages=[
-                    {"role": "system", "content": (
-                        "Extract the caller's full name from a call transcript. "
-                        "Reply with ONLY the name (e.g. 'Jane Smith'). "
-                        "If no name is mentioned, reply with exactly: Unknown Caller"
-                    )},
-                    {"role": "user", "content": transcript_text},
-                ],
-                max_tokens=1024,
+            extracted = _complete(
+                "Extract the caller's full name from a call transcript. "
+                "Reply with ONLY the name (e.g. 'Jane Smith'). "
+                "If no name is mentioned, reply with exactly: Unknown Caller",
+                transcript_text,
                 temperature=0,
             )
-            extracted = name_response.choices[0].message.content.strip()
             if extracted and extracted.lower() != "unknown caller":
                 caller_name = extracted
                 logger.info("Extracted caller name from transcript: %r", caller_name)
@@ -96,17 +118,10 @@ def generate_call_summary(
     )
 
     try:
-        response = _call_with_retry(
-            client,
-            model=settings.cerebras_model,
-            messages=[
-                {"role": "system", "content": "You are a concise call summary assistant. Output only the summary text, no headers or labels."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=1024,
-            temperature=0.3,
+        summary = _complete(
+            "You are a concise call summary assistant. Output only the summary text, no headers or labels.",
+            prompt,
         )
-        summary = response.choices[0].message.content.strip()
         logger.info("Generated summary for call | caller=%s summary=%r", caller_name, summary[:100])
         return caller_name, summary
     except Exception as e:

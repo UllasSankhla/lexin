@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
@@ -18,24 +17,39 @@ _SPEAK_SLOTS_SYSTEM = (
     "Ask which one they prefer."
 )
 
-_YES_RE = re.compile(
-    r"\b(yes|yeah|yep|yup|correct|right|confirmed|confirm|sure|ok|okay|"
-    r"perfect|great|sounds good|go ahead|absolutely|definitely)\b", re.IGNORECASE
-)
-_NO_RE = re.compile(
-    r"\b(no|nope|nah|wrong|incorrect|change|different|actually|wait|"
-    r"hold on|not right|not quite)\b", re.IGNORECASE
-)
+_CONFIRM_INTENT_SYSTEM = """\
+The caller was just asked to confirm a specific appointment slot (e.g. "I'll book you for Monday at 10 AM. Shall I confirm?").
+Classify their response into exactly one of:
+
+confirm  — caller accepts the slot as-is.
+           Examples: "Yes", "That works", "Go ahead", "Perfect", "Sounds good", "Sure",
+                     "Let's do it", "That's fine", "Confirmed"
+
+reject   — caller declines and wants to see other options (no specific new time given).
+           Examples: "No", "That doesn't work", "Change it", "Pick a different one",
+                     "Actually no", "I'd rather not", "Let me think", "Never mind"
+
+new_slot — caller rejects the slot AND specifies a new time preference.
+           Examples: "Do you have anything later?", "Let's do 1pm", "Can we do Tuesday afternoon?",
+                     "The second one", "How about Wednesday?", "After noon if possible"
+
+Respond with ONLY valid JSON: {"intent": "confirm"} or {"intent": "reject"} or {"intent": "new_slot"}
+"""
 
 
-def _detect_confirmation(text: str):
-    has_yes = bool(_YES_RE.search(text))
-    has_no = bool(_NO_RE.search(text))
-    if has_yes and not has_no:
-        return True
-    if has_no and not has_yes:
-        return False
-    return None
+def _detect_confirmation(utterance: str, slot_desc: str = "") -> str:
+    """Return 'confirm', 'reject', or 'new_slot' via LLM classification."""
+    context = f'Slot offered: "{slot_desc}"\n' if slot_desc else ""
+    user_msg = f'{context}Caller said: "{utterance}"'
+    try:
+        result = llm_json_call(_CONFIRM_INTENT_SYSTEM, user_msg, max_tokens=16)
+        intent = result.get("intent", "")
+        if intent in ("confirm", "reject", "new_slot"):
+            logger.debug("SchedulingAgent: confirm_intent=%r for %r", intent, utterance[:60])
+            return intent
+    except Exception as exc:
+        logger.warning("SchedulingAgent: _detect_confirmation LLM failed: %s — defaulting to new_slot", exc)
+    return "new_slot"
 
 
 class SchedulingAgent(AgentBase):
@@ -270,22 +284,22 @@ class SchedulingAgent(AgentBase):
         )
 
     def _handle_confirmation(self, utterance: str, internal_state: dict, config: dict) -> SubagentResponse:
-        intent = _detect_confirmation(utterance)
         slots_data = internal_state.get("available_slots", [])
         chosen_idx = internal_state.get("chosen_slot_id", 0)
+        chosen_data = slots_data[chosen_idx] if slots_data and chosen_idx < len(slots_data) else None
+        slot_desc = chosen_data["description"] if chosen_data else ""
 
-        if intent is True:
-            if not slots_data or chosen_idx >= len(slots_data):
+        intent = _detect_confirmation(utterance, slot_desc)
+        logger.info("SchedulingAgent: confirmation intent=%r | utterance=%r", intent, utterance[:60])
+
+        if intent == "confirm":
+            if not chosen_data:
                 return SubagentResponse(
                     status=AgentStatus.COMPLETED,
                     speak="Your appointment has been confirmed. We'll see you then!",
                     internal_state=internal_state,
                 )
-            chosen_data = slots_data[chosen_idx]
-
-            # Reconstruct TimeSlot object for book_time_slot
             from app.services.calendar_service import TimeSlot
-            # Parse stored ISO datetime strings back to datetime objects
             start_dt = datetime.fromisoformat(chosen_data["start_time"]) if chosen_data.get("start_time") else datetime.now(timezone.utc)
             end_dt = datetime.fromisoformat(chosen_data["end_time"]) if chosen_data.get("end_time") else start_dt + timedelta(hours=1)
             slot = TimeSlot(
@@ -313,25 +327,15 @@ class SchedulingAgent(AgentBase):
                 internal_state=internal_state,
             )
 
-        if intent is False:
+        if intent == "reject":
             internal_state["stage"] = "awaiting_choice"
             internal_state["retry_count"] = 0
-            if slots_data:
-                speak = self._speak_slots(slots_data)
-            else:
-                speak = "No problem. When would work best for you?"
+            speak = self._speak_slots(slots_data) if slots_data else "No problem. When would work best for you?"
             return SubagentResponse(
                 status=AgentStatus.IN_PROGRESS,
                 speak=speak,
                 internal_state=internal_state,
             )
 
-        # Unclear
-        chosen_data = slots_data[chosen_idx] if slots_data and chosen_idx < len(slots_data) else None
-        desc = chosen_data["description"] if chosen_data else "the selected time"
-        return SubagentResponse(
-            status=AgentStatus.WAITING_CONFIRM,
-            speak=f"Should I book {desc} for you? Please say yes to confirm or no to pick a different time.",
-            pending_confirmation={"slot": desc},
-            internal_state=internal_state,
-        )
+        # new_slot — caller wants a different time; let _handle_choice parse the preference
+        return self._handle_choice(utterance, internal_state, config)

@@ -62,6 +62,71 @@ _DEFAULT_HINTS: dict[str, list[str]] = {
     ],
 }
 
+# ── Typed field shape enforcement ─────────────────────────────────────────────
+# Applied after LLM extraction to reject structurally impossible type assignments
+# (e.g. "VW3R9KJ2" assigned to a "state" field). The regex _validate() handles
+# format correctness; this guard handles semantic type mismatches.
+
+_US_STATE_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+    "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada",
+    "new hampshire", "new jersey", "new mexico", "new york",
+    "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode island", "south carolina", "south dakota",
+    "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+    "west virginia", "wisconsin", "wyoming",
+    "district of columbia", "washington dc", "dc",
+}
+_US_STATE_CODES = {
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga",
+    "hi", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md",
+    "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj",
+    "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc",
+    "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy",
+}
+_OPAQUE_ID_RE = re.compile(r'^[A-Z0-9]{4,}$', re.IGNORECASE)
+
+
+def _shape_matches_type(value: str, data_type: str) -> bool:
+    """
+    Returns True if value's shape is plausible for data_type.
+    Returns False only for structurally impossible matches to prevent
+    the LLM from assigning values (like MetLife IDs) to wrong field types.
+    """
+    v = value.strip()
+    if not v:
+        return True
+
+    if data_type in ("state", "us_state"):
+        norm = v.lower()
+        if norm in _US_STATE_NAMES or norm in _US_STATE_CODES:
+            return True
+        # Reject alphanumeric IDs and pure numbers as state values
+        if _OPAQUE_ID_RE.match(v) and len(v) > 2:
+            return False
+        if re.match(r'^\d', v):
+            return False
+        return True  # uncertain — let _validate() handle
+
+    if data_type == "email":
+        if "@" not in v and " at " not in v.lower():
+            return False
+        return True
+
+    if data_type == "phone":
+        digit_count = sum(c.isdigit() for c in v)
+        return digit_count >= 7
+
+    if data_type == "number":
+        return bool(re.match(r'^\d+(\.\d+)?$', v))
+
+    # name, text, id, date — permissive; _validate handles format
+    return True
+
+
 # Deterministic opening questions per type — no LLM call needed for the first prompt
 _OPENING_QUESTIONS: dict[str, str] = {
     "name":   "Could I start with your full name, please?",
@@ -89,26 +154,78 @@ def _build_fields_block(parameters: list[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _build_intake_flow_block(parameters: list[dict]) -> str:
+    """Build a compact ordered summary of fields to collect."""
+    if not parameters:
+        return ""
+    sorted_params = sorted(parameters, key=lambda x: x.get("collection_order", 999))
+    lines = [
+        "Collect the following fields in this exact order.",
+        "Confirm each one before moving to the next. Required fields cannot be skipped.",
+    ]
+    for i, p in enumerate(sorted_params, 1):
+        req = "required" if p.get("required", True) else "optional — skip if caller declines"
+        lines.append(f"  {i}. {p['display_label']} ({req})")
+    return "\n".join(lines)
+
+
+def _build_policy_docs_block(policy_docs: list[dict]) -> str:
+    """Concatenate global policy document contents for injection into the prompt."""
+    if not policy_docs:
+        return ""
+    parts = []
+    for doc in policy_docs:
+        content = doc.get("content", "").strip()
+        if content:
+            parts.append(content)
+    return "\n\n".join(parts)
+
+
 def _build_mega_prompt(
     parameters: list[dict],
     collected: dict,
     pending: dict | None,
     persona_name: str,
     workflow_stages: str = "",
+    call_transcript: str = "",
+    policy_docs: list[dict] | None = None,
 ) -> str:
     fields_block = _build_fields_block(parameters)
+    intake_flow = _build_intake_flow_block(parameters)
     collected_json = json.dumps(collected, indent=2) if collected else "{}"
     pending_json = json.dumps(pending, indent=2) if pending else "none"
     stages_block = (
         f"\n{workflow_stages}\n"
         if workflow_stages else ""
     )
+    intake_flow_block = (
+        f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"INTAKE COLLECTION ORDER\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{intake_flow}\n"
+        if intake_flow else ""
+    )
+    policy_content = _build_policy_docs_block(policy_docs or [])
+    policy_block = (
+        f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"FIRM INTAKE PROCEDURE (follow exactly)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{policy_content}\n"
+        if policy_content else ""
+    )
+    transcript_block = (
+        f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"CALL TRANSCRIPT SO FAR\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{call_transcript}\n"
+        if call_transcript else ""
+    )
 
     return f"""\
 You are an AI intake receptionist conducting a voice call on behalf of {persona_name}.
 Your role right now is to collect specific information from the caller.
 Be warm, patient, and concise — this is a voice call, not a form.
-{stages_block}
+{stages_block}{intake_flow_block}{policy_block}{transcript_block}
 
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 FIELDS TO COLLECT
@@ -128,7 +245,14 @@ Awaiting caller's yes/no confirmation for:
 EXTRACTION RULES
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 1. OUT-OF-ORDER: Extract any field the caller mentions, even if it is not the
-   current one. If the caller provides field 3 before field 1, accept it.
+   field currently being asked for or pending confirmation.
+   - If the caller provides field 3 while field 1 is pending confirmation:
+     extract field 3 into the extracted dict, keep the pending confirmation, and
+     re-ask for the pending confirmation in the same response.
+   - If the caller provides a value for the field that IS pending confirmation:
+     treat it as a correction (intent=correction) — update the pending value and
+     ask the caller to confirm the new value.
+   Never discard a field value just because it arrived out of order.
 
 2. MULTIPLE FIELDS AT ONCE: A single utterance may contain values for several
    fields. Extract all of them. Queue only one pending_confirmation at a time.
@@ -147,15 +271,81 @@ EXTRACTION RULES
    corrected field in pending_confirmation; put other extracted values in
    the extracted dict.
 
-5. INCOMPLETE UTTERANCE: If the caller's speech seems cut off mid-sentence
-   (e.g. ends on "my email is..." with no address following), do not guess.
-   Set incomplete_utterance=true and ask them to continue.
+5. INCOMPLETE UTTERANCE AND PARTIAL DATA RECONSTRUCTION:
+
+   A. SENTENCE CONTINUATION: If the caller's speech seems cut off mid-sentence
+      (e.g. ends on "my email is..." with no address following), do not guess.
+      Set incomplete_utterance=true and ask them to continue.
+      Also check the CALL TRANSCRIPT for the rest of a sentence the caller
+      started in a prior turn (e.g. they said "my email is" last turn and
+      "john at gmail dot com" this turn — combine them).
+
+   B. PARTIAL VALUE RECONSTRUCTION — CRITICAL: When the current utterance
+      contains only part of a field value (e.g. only a domain fragment like
+      "at gmail dot com" with no local part, or only digits without an area
+      code), do NOT immediately ask for it again. Instead:
+
+      1. Scan the last 5 caller utterances in the CALL TRANSCRIPT above.
+      2. Look for any earlier utterance that could supply the missing component
+         for the same field:
+         - Email: look for a local-part (letters/digits before "@"), a spelled
+           name, or letter-by-letter spelling in prior turns.
+         - Phone: look for digit groups that could be an area code or suffix
+           provided in an earlier turn.
+         - Name: look for a first or last name mentioned separately in prior turns.
+      3. If the missing component is found in history, combine the pieces and
+         treat the assembled result as the field value. Proceed with read-back
+         and confirmation of the reconstructed value.
+      4. Only ask the caller to repeat if the missing component is genuinely
+         absent from the last 5 utterances.
+
+      Examples:
+      - Caller said "john dot doe" two turns ago, now says "at gmail dot com"
+        → reconstruct email as john.doe@gmail.com, read it back to confirm.
+      - Caller said "four one five" one turn ago, now says "five five five zero one
+        nine two" → reconstruct phone as 4155550192, read it back to confirm.
+      - Caller said "sarah" three turns ago, now says "mitchell" → reconstruct
+        name as "Sarah Mitchell", read it back to confirm.
 
 6. SKIP (optional fields only): If the caller says "skip", "I don't have one",
    "not applicable", or "I'd rather not say" record the field as "" in extracted.
 
-7. DO NOT INVENT: Never guess or fabricate a value. If you cannot confidently
-   extract a value, do not put it in extracted.
+7. TYPE SHAPE RULE — never assign a value to a field if its shape is structurally
+   wrong for the field's declared type:
+   - Fields with type "state" or "us_state": ONLY accept US state names ("California",
+     "Washington") or 2-letter codes ("CA", "WA"). NEVER assign alphanumeric IDs,
+     numbers, or non-state words. Example: if caller says "VW3R9KJ2" while the
+     current field is "state_of_matter", do NOT extract it — they likely gave an
+     unrelated ID (e.g. a MetLife member ID), not a state name.
+   - Fields with type "email": value MUST contain "@" or spoken "at" between parts.
+   - Fields with type "phone": value MUST be primarily digits (at least 7 digits total).
+   - Fields with type "number": value MUST be a numeric value only.
+   When in doubt about which field a value belongs to, DO NOT assign it to a field
+   whose type clearly doesn't match. Leave it unextracted.
+
+8. STRICT NO-FABRICATION RULE — applies to every field, no exceptions:
+   NEVER guess, infer, construct, or fabricate any value. Extract only what the
+   caller explicitly stated in this utterance or in the CALL TRANSCRIPT.
+
+   NAMES: If the name is garbled, phonetically ambiguous, or you heard only
+   part of it — set incomplete_utterance=true and ask the caller to spell it.
+   Do NOT construct a name from sounds (e.g. hearing "Prastina" and writing
+   "Christina"). The only acceptable source is the caller's own words or spelling.
+
+   PHONE NUMBERS: Extract only digits the caller clearly stated. If any digit
+   group is missing or unclear, ask for it. Never fill in area codes or
+   missing digits from context.
+
+   ADDRESSES: Extract only the components the caller explicitly gave. Do not
+   infer city from state, state from zip code, or fill in any part of an address
+   that was not stated. If a component is missing, ask for it.
+
+   EMAIL: Transcribe exactly what was spelled or spoken. If ambiguous, ask the
+   caller to spell the local part character by character.
+
+   DATES: Only use what the caller provided. Do not assume the year.
+
+   If in doubt — ask. Silence is better than a wrong value.
 
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 CONFIRMATION RULES
@@ -190,12 +380,24 @@ work remains.
 The speak for a resolved confirmation is always:
   <brief acknowledgment> + <question for next uncollected field>
 
-If "Awaiting caller's yes/no confirmation for" above is not "none", interpret
-this utterance as a yes/no FIRST before attempting any field extraction:
+CALLER UTTERANCE TAKES PRIORITY — always read the full utterance and extract
+any concrete field values present BEFORE deciding whether it is a yes/no response.
+
+If the utterance contains concrete field data (phone digits, an email address,
+a name, a date, an address, etc.) — regardless of pending_confirmation state:
+  - Do NOT interpret it as "yes" or "no" — it is new information
+  - A string of spoken digits is NEVER a confirmation signal ("Two zero two..." = phone, not "yes")
+  - If the value matches the pending field → intent=correction; update
+    pending_confirmation with the new value; speak the read-back and ask to confirm
+  - If the value matches a DIFFERENT field → extract it (Rule 1 out-of-order),
+    queue it, and re-ask for the pending field in the same response
+  - Never discard field data because a confirmation was outstanding
+
+Only interpret as yes/no when the utterance contains NO extractable field values:
 - YES signals: "yes", "yep", "correct", "that's right", "uh huh", "sure",
                "sounds good", "affirmative", "go ahead"
 - NO signals:  "no", "nope", "wrong", "that's not it", "incorrect"
-- CORRECTION:  "actually...", "no it's...", "make that...", "wait..."
+- CORRECTION (explicit verbal): "actually...", "no it's...", "make that...", "wait..."
                Set intent=correction, put new value in correction_value,
                and put the corrected value in pending_confirmation with the
                same field key as the current pending confirmation.
@@ -272,6 +474,21 @@ Rules:
 """
 
 
+def _format_call_transcript(history: list[dict]) -> str:
+    """Format the call history into a readable transcript string."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        role = turn.get("role", "")
+        content = turn.get("content", "")
+        if not content:
+            continue
+        label = "Caller" if role == "user" else "Assistant"
+        lines.append(f"{label}: {content}")
+    return "\n".join(lines)
+
+
 class DataCollectionAgent(AgentBase):
     """
     Collects required parameters using a single mega-prompt per turn.
@@ -305,6 +522,7 @@ class DataCollectionAgent(AgentBase):
                 status=AgentStatus.COMPLETED,
                 speak="",
                 internal_state=internal_state,
+                confidence=1.0,
             )
 
         if not internal_state:
@@ -325,6 +543,7 @@ class DataCollectionAgent(AgentBase):
                 speak="",
                 collected=collected,
                 internal_state=internal_state,
+                confidence=1.0,
             )
 
         # ── Opening: no utterance yet ─────────────────────────────────────────
@@ -337,18 +556,22 @@ class DataCollectionAgent(AgentBase):
                     speak=speak,
                     pending_confirmation=pending,
                     internal_state=internal_state,
+                    confidence=1.0,
                 )
             speak = self._template_question(remaining[0])
             return SubagentResponse(
                 status=AgentStatus.IN_PROGRESS,
                 speak=speak,
                 internal_state=internal_state,
+                confidence=0.9,
             )
 
         # ── Mega-prompt LLM call ──────────────────────────────────────────────
         persona = config.get("assistant", {}).get("persona_name", "Assistant")
         workflow_stages = config.get("_workflow_stages", "")
-        system = _build_mega_prompt(parameters, collected, pending, persona, workflow_stages)
+        call_transcript = _format_call_transcript(history)
+        policy_docs = config.get("global_policy_documents", [])
+        system = _build_mega_prompt(parameters, collected, pending, persona, workflow_stages, call_transcript, policy_docs)
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
         user_msg = f'Caller said: "{utterance}"'
 
@@ -370,17 +593,25 @@ class DataCollectionAgent(AgentBase):
                     speak="",
                     internal_state={**internal_state, "cannot_process_reason": "llm_parse_failure"},
                     pending_confirmation=pending,
+                    confidence=0.0,
                 )
             return SubagentResponse(
                 status=AgentStatus.IN_PROGRESS,
                 speak="I'm sorry, I didn't quite catch that. Could you please repeat?",
                 internal_state=internal_state,
+                confidence=0.3,
             )
 
         # ── Update conversation history ───────────────────────────────────────
+        # Cap at last 8 entries (4 agent turns) — the full call transcript is
+        # already in the system prompt so the LLM has complete context there.
+        # Unbounded growth wastes tokens and can cause stale-context confusion.
         llm_history.add("user", user_msg)
         llm_history.add("assistant", result.speak or "")
-        internal_state["llm_history"] = llm_history.to_list()
+        history_list = llm_history.to_list()
+        if len(history_list) > 8:
+            history_list = history_list[-8:]
+        internal_state["llm_history"] = history_list
 
         # ── Handle cannot_process / unhandled ────────────────────────────────
         if result.cannot_process or result.status == "unhandled":
@@ -396,6 +627,7 @@ class DataCollectionAgent(AgentBase):
                     "cannot_process_reason": result.cannot_process_reason,
                 },
                 pending_confirmation=pending,
+                confidence=0.0,
             )
 
         internal_state["retry_count"] = 0
@@ -435,6 +667,7 @@ class DataCollectionAgent(AgentBase):
                             status=AgentStatus.IN_PROGRESS,
                             speak=f"{msg_or_val} Could you try again?",
                             internal_state=internal_state,
+                            confidence=0.7,
                         )
                     logger.info(
                         "DataCollection: correction for %s -> %r (validated)",
@@ -462,6 +695,14 @@ class DataCollectionAgent(AgentBase):
                     internal_state["collected"] = collected
                     logger.info("DataCollection: optional field %r skipped by caller", field_name)
             elif field_name != pending_field_from_llm and field_name not in queued_fields:
+                # Shape-match guard: reject structurally impossible type assignments
+                param = self._find_param(parameters, field_name)
+                if param and not _shape_matches_type(value, param.get("data_type", "text")):
+                    logger.info(
+                        "DataCollection: shape mismatch — rejecting %r for field %r (type=%s)",
+                        value, field_name, param.get("data_type"),
+                    )
+                    continue
                 queue.append({"field": field_name, "value": value})
                 queued_fields.add(field_name)
                 logger.info("DataCollection: queued extracted field %r = %r", field_name, value)
@@ -481,22 +722,53 @@ class DataCollectionAgent(AgentBase):
             if pc.field not in collected or is_correction_of_confirmed:
                 param = self._find_param(parameters, pc.field)
                 if param:
-                    is_valid, msg_or_val = self._validate(param, pc.value)
-                    if is_valid:
-                        new_pending = {"field": pc.field, "value": msg_or_val}
-                        if is_correction_of_confirmed:
-                            del collected[pc.field]
-                            internal_state["collected"] = collected
-                            logger.info(
-                                "DataCollection: re-opening confirmed field %r for correction → %r",
-                                pc.field, msg_or_val,
-                            )
-                    else:
-                        validation_error_speak = f"{msg_or_val} Could you try again?"
+                    # Shape guard: reject structurally impossible type assignments.
+                    # On mismatch, silently drop the bad pending (the field will be
+                    # asked normally in a future turn).  Only surface an error to the
+                    # caller when they explicitly provided a correction and the value
+                    # still fails shape — that means the caller typed the wrong thing.
+                    if not _shape_matches_type(pc.value, param.get("data_type", "text")):
                         logger.info(
-                            "DataCollection: pending validation failed for %s: %s",
-                            pc.field, msg_or_val,
+                            "DataCollection: shape mismatch in pending_confirmation — "
+                            "field=%r value=%r type=%s — dropping silently",
+                            pc.field, pc.value, param.get("data_type"),
                         )
+                        if result.intent == "correction":
+                            validation_error_speak = (
+                                f"I'm sorry, that doesn't seem right for {param['display_label']}. "
+                                "Could you try again?"
+                            )
+                        # else: LLM extraction error — drop without telling the caller
+                    else:
+                        # Skip validation entirely if the LLM gave an empty value —
+                        # that's an extraction miss, not a user error.  Let Step C¾
+                        # promote from the queue or the normal question flow ask again.
+                        if not pc.value or not pc.value.strip():
+                            logger.info(
+                                "DataCollection: empty pending_confirmation for %r — skipping silently",
+                                pc.field,
+                            )
+                        else:
+                            is_valid, msg_or_val = self._validate(param, pc.value)
+                            if is_valid:
+                                new_pending = {"field": pc.field, "value": msg_or_val}
+                                if is_correction_of_confirmed:
+                                    del collected[pc.field]
+                                    internal_state["collected"] = collected
+                                    logger.info(
+                                        "DataCollection: re-opening confirmed field %r for correction → %r",
+                                        pc.field, msg_or_val,
+                                    )
+                            else:
+                                # Only show validation errors for user corrections,
+                                # not for LLM extraction failures on regular questions.
+                                if result.intent == "correction":
+                                    validation_error_speak = f"{msg_or_val} Could you try again?"
+                                else:
+                                    logger.info(
+                                        "DataCollection: pending validation failed for %s: %s — dropping",
+                                        pc.field, msg_or_val,
+                                    )
                 else:
                     logger.warning(
                         "DataCollection: LLM set pending for unknown field %r — ignoring",
@@ -534,6 +806,27 @@ class DataCollectionAgent(AgentBase):
                     )
             internal_state["extraction_queue"] = queue
 
+        # ── Step C+: Re-surface unresolved pending confirmation ───────────────
+        # If a pending confirmation existed at entry but the LLM's intent was
+        # not confirm_yes / confirm_no / correction (e.g. mis-classified as
+        # "answer"), AND neither Step C nor C¾ produced a new pending, the old
+        # pending would be silently erased at line 630 — the field is never
+        # added to collected and the agent re-asks for it indefinitely.
+        # Fix: preserve and re-surface the original pending so the caller is
+        # asked again rather than the confirmation being dropped.
+        if (
+            pending
+            and not new_pending
+            and not validation_error_speak
+            and result.intent not in ("confirm_yes", "confirm_no", "correction")
+        ):
+            new_pending = pending
+            queue_speak = self._rephrase_confirmation(new_pending, parameters)
+            logger.info(
+                "DataCollection: pending for %r not resolved by intent=%r — re-surfacing",
+                pending["field"], result.intent,
+            )
+
         internal_state["pending_confirmation"] = new_pending
         internal_state["collected"] = collected
 
@@ -548,6 +841,7 @@ class DataCollectionAgent(AgentBase):
                 speak=speak,
                 collected=collected,
                 internal_state=internal_state,
+                confidence=1.0,
             )
 
         # ── Step E: Return ────────────────────────────────────────────────────
@@ -557,14 +851,24 @@ class DataCollectionAgent(AgentBase):
 
         if new_pending and not validation_error_speak:
             status = AgentStatus.WAITING_CONFIRM
+            # High confidence: agent cleanly extracted a field and is confirming it
+            conf = 0.9
         else:
             status = AgentStatus.IN_PROGRESS
+            # Confidence depends on how cleanly the agent handled the utterance
+            if result.intent in ("confirm_yes", "confirm_no", "correction"):
+                conf = 0.9  # clean confirmation/correction handling
+            elif result.intent == "answer":
+                conf = 0.75  # agent processed an answer but no field confirmed
+            else:
+                conf = 0.6  # ambiguous or general progress
 
         return SubagentResponse(
             status=status,
             speak=speak,
             pending_confirmation=new_pending,
             internal_state=internal_state,
+            confidence=conf,
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────

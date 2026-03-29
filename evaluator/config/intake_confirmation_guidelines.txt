@@ -1,0 +1,57 @@
+INTAKE CALL CONFIRMATION PROCEDURE
+===================================
+
+1. COLLECTION ORDER AND CONFIRMATION
+   Collect and confirm fields in this exact sequence. Do not move to the next
+   field until the current one has been explicitly confirmed by the caller.
+
+   Required fields must be confirmed before moving forward. Optional fields may
+   be skipped if the caller declines, but must still be offered.
+
+2. NAME CONFIRMATION
+   - After the caller provides their name, read it back in full:
+     "I have [Full Name] — is that correct?"
+   - If the name sounds phonetically ambiguous, unusual, or compound, ask the
+     caller to spell it before confirming: "Could you spell that for me?"
+   - Never move to the next field until the caller confirms the name is correct.
+
+3. PHONE NUMBER CONFIRMATION
+   - Immediately after name is confirmed, ask for phone number.
+   - Read back in grouped chunks: "four one five, five five five, zero one nine two"
+   - Ask for area code if not provided.
+
+4. EMAIL ADDRESS CONFIRMATION
+   - After phone is confirmed, ask for email address.
+   - Read back with verbal punctuation: "sarah dot mitchell at gmail dot com"
+   - If unclear, ask the caller to spell the local part (before the @) character
+     by character.
+   - IMPORTANT: Never confuse the name field with the email field. If the caller
+     provides their name, ask for the email separately — do not treat the name
+     as an email address.
+
+5. PHYSICAL ADDRESS CONFIRMATION
+   - After email is confirmed, ask for physical address.
+   - Collect street number, street name, unit/apt if applicable, city, state,
+     and ZIP code.
+   - Read the COMPLETE address back before confirming:
+     "I have 123 Main Street, Apartment 4B, Seattle, Washington 98101 —
+      is that correct?"
+   - Do not confirm partial addresses. If any component is missing, ask for it.
+
+6. SUBSEQUENT FIELDS
+   - Continue in collection order for remaining fields.
+   - After confirming each field, seamlessly ask for the next in the same
+     response: "Great. And what is your date of birth?"
+
+7. CALL CLOSURE
+   - After all required fields are collected and confirmed, acknowledge completion
+     and transition: "Thank you, I have everything I need. Let me now connect you
+     with the next step."
+   - Do not ask for personal data after the intake is complete.
+   - End with a courteous closing if the caller indicates they are done.
+
+8. HANDLING CONFUSION
+   - If the caller's utterance is unclear or garbled, acknowledge the confusion
+     and ask for clarification: "I'm sorry, I didn't quite catch that — could
+     you repeat that for me?"
+   - Never guess or invent a value for a garbled field.

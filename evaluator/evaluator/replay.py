@@ -33,12 +33,13 @@ from app.agents.context_docs import ContextDocsAgent                # noqa: E402
 from app.agents.fallback import FallbackAgent                       # noqa: E402
 from app.agents.farewell import FarewellAgent                       # noqa: E402
 from app.agents.empathy import EmpathyAgent                         # noqa: E402
-from app.agents.scheduling import SchedulingAgent, _detect_confirmation  # noqa: E402
+from app.agents.scheduling import SchedulingAgent  # noqa: E402
 from app.agents.graph_config import APPOINTMENT_BOOKING             # noqa: E402
 from app.agents.workflow import WorkflowGraph                       # noqa: E402
 from app.agents.planner import Planner, PlanStep                    # noqa: E402
 from app.services.calendar_service import TimeSlot                  # noqa: E402
 import app.agents.scheduling as _sched_module                       # noqa: E402
+from app.agents.empathy_filter import apply_empathy_filter          # noqa: E402
 
 from evaluator.models import TestCase, ReplayTurn, ReplayResult
 
@@ -160,16 +161,16 @@ def _invoke_and_follow(
     agent = registry[agent_id]
     agent_state = graph.states[agent_id]
 
-    recent_history = [
+    call_history = [
         {"role": t["role"], "content": t["content"]}
-        for t in transcript_turns[-8:]
+        for t in transcript_turns
     ]
 
     response: SubagentResponse = agent.process(
         utterance,
         dict(agent_state.internal_state),
         enriched_config,
-        recent_history,
+        call_history,
     )
 
     graph.update(agent_id, response, turn_idx)
@@ -187,7 +188,7 @@ def _invoke_and_follow(
         reason = response.internal_state.get("cannot_process_reason", "unknown")
         logger.info("Agent %s UNHANDLED (reason=%s) — re-planning", agent_id, reason)
         if chain_depth < _MAX_CHAIN:
-            re_steps = planner.plan(utterance, recent_history)
+            re_steps = planner.plan(utterance, call_history)
             re_agent_id = next(
                 (s.agent_id for s in re_steps if s.action == "invoke" and s.agent_id != agent_id),
                 None,
@@ -265,16 +266,16 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
             transcript_turns.append({"role": "user", "content": utterance})
             turn_idx = i + 1
 
-            recent_history = [
+            call_history = [
                 {"role": t["role"], "content": t["content"]}
-                for t in transcript_turns[-8:]
+                for t in transcript_turns
             ]
 
             try:
                 # Planner generates a multi-step execution plan
-                steps = planner.plan(utterance, recent_history)
+                steps = planner.plan(utterance, call_history)
 
-                speaks: list[tuple[str, str]] = []  # (speak_text, agent_id) pairs
+                speaks: list[tuple[str, str, float]] = []  # (speak_text, agent_id, confidence)
                 fr: Optional[str] = None
                 agent_id = "unknown"
                 waiting_confirm_speak: Optional[str] = None
@@ -293,21 +294,27 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
                             if primary_id:
                                 planner.push_resume(primary_id)
 
+                        invoke_utterance = "" if getattr(step, "use_empty_utterance", False) else utterance
                         step_speak, step_fr = _invoke_and_follow(
-                            agent_id, utterance, turn_idx, graph, registry, planner,
+                            agent_id, invoke_utterance, turn_idx, graph, registry, planner,
                             config, collected, transcript_turns,
                         )
+                        step_conf = 1.0  # replay doesn't need precise confidence values
 
                         # WAITING_CONFIRM takes absolute priority — capture and stop
                         agent_state = graph.states.get(agent_id)
                         if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
-                            waiting_confirm_speak = step_speak
+                            if speaks:
+                                prior = planner.combine_speaks(speaks)
+                                waiting_confirm_speak = (prior + " " + step_speak).strip()
+                            else:
+                                waiting_confirm_speak = step_speak
                             if step_fr is not None:
                                 fr = step_fr
                             break
 
                         if step_speak:
-                            speaks.append((step_speak, agent_id))
+                            speaks.append((step_speak, agent_id, step_conf))
 
                         if step_fr is not None:
                             fr = step_fr
@@ -320,6 +327,8 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
 
                 if not speak_text or not speak_text.strip():
                     speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
+
+                speak_text = apply_empathy_filter(speak_text, collected, transcript_turns)
 
                 transcript_turns.append({"role": "assistant", "content": speak_text})
 

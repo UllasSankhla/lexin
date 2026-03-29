@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     cerebras_max_tokens: int = 1024
     cerebras_temperature: float = 0.4
 
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-haiku-4-5-20251001"
+    anthropic_max_tokens: int = 1024
+    anthropic_temperature: float = 0.4
+
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_max_tokens: int = 1024
+    openai_temperature: float = 0.4
+
+    llm_provider: str = "cerebras"  # "openai" | "anthropic" | "cerebras"
+
     max_call_duration_sec: int = 600   # 10 minutes — also controls receive loop timeout
     silence_timeout_sec: int = 30      # Deepgram end-of-utterance detection window
     session_token_ttl_sec: int = 300
