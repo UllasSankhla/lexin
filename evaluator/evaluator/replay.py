@@ -280,45 +280,54 @@ def replay_test_case(test_case: TestCase, config: dict) -> ReplayResult:
                 agent_id = "unknown"
                 waiting_confirm_speak: Optional[str] = None
 
+                # Separate reset_fields (applied immediately) from invoke steps
+                invoke_steps = []
                 for step in steps:
                     if step.action == "reset_fields" and step.fields:
                         planner.reset_fields(step.fields, collected)
-
                     elif step.action == "invoke" and step.agent_id:
-                        agent_id = step.agent_id
+                        invoke_steps.append(step)
 
-                        # Push active primary onto resume stack for interrupt agents
-                        node = graph.nodes.get(agent_id)
-                        if node and node.interrupt_eligible:
-                            primary_id = planner.active_primary_for_resume()
-                            if primary_id:
-                                planner.push_resume(primary_id)
+                # Execute invoke steps sequentially (replay is sync; parallel-safe
+                # groups from the handler run in order here, which is functionally
+                # equivalent for evaluation purposes).
+                for step in invoke_steps:
+                    if fr is not None:
+                        break
+                    agent_id = step.agent_id
 
-                        invoke_utterance = "" if getattr(step, "use_empty_utterance", False) else utterance
-                        step_speak, step_fr = _invoke_and_follow(
-                            agent_id, invoke_utterance, turn_idx, graph, registry, planner,
-                            config, collected, transcript_turns,
-                        )
-                        step_conf = 1.0  # replay doesn't need precise confidence values
+                    # Push active primary onto resume stack for interrupt agents
+                    node = graph.nodes.get(agent_id)
+                    if node and node.interrupt_eligible:
+                        primary_id = planner.active_primary_for_resume()
+                        if primary_id:
+                            planner.push_resume(primary_id)
 
-                        # WAITING_CONFIRM takes absolute priority — capture and stop
-                        agent_state = graph.states.get(agent_id)
-                        if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
-                            if speaks:
-                                prior = planner.combine_speaks(speaks)
-                                waiting_confirm_speak = (prior + " " + step_speak).strip()
-                            else:
-                                waiting_confirm_speak = step_speak
-                            if step_fr is not None:
-                                fr = step_fr
-                            break
+                    invoke_utterance = "" if getattr(step, "use_empty_utterance", False) else utterance
+                    step_speak, step_fr = _invoke_and_follow(
+                        agent_id, invoke_utterance, turn_idx, graph, registry, planner,
+                        config, collected, transcript_turns,
+                    )
+                    step_conf = 1.0  # replay doesn't need precise confidence values
 
-                        if step_speak:
-                            speaks.append((step_speak, agent_id, step_conf))
-
+                    # WAITING_CONFIRM takes absolute priority — capture and stop
+                    agent_state = graph.states.get(agent_id)
+                    if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
+                        if speaks:
+                            prior = planner.combine_speaks(speaks)
+                            waiting_confirm_speak = (prior + " " + step_speak).strip()
+                        else:
+                            waiting_confirm_speak = step_speak
                         if step_fr is not None:
                             fr = step_fr
-                            break
+                        break
+
+                    if step_speak:
+                        speaks.append((step_speak, agent_id, step_conf))
+
+                    if step_fr is not None:
+                        fr = step_fr
+                        break
 
                 if waiting_confirm_speak is not None:
                     speak_text = waiting_confirm_speak

@@ -196,6 +196,19 @@ AVAILABLE ACTIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2: PLANNING RULES (check in order)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+0. WAITING_CONFIRM — Check AGENT STATUS. If any agent shows "WAITING_CONFIRM"
+   (it is mid-confirmation, waiting for caller to say yes or no):
+   a) utterance_type=DIRECT_ANSWER or CONTROL (yes/no/confirm/correct/stop):
+      Plan ONLY: [invoke("<waiting_agent>")]. It handles the yes/no response.
+   b) utterance_type=NEW_TOPIC (caller asks a question while mid-confirmation):
+      Plan: [invoke("<answer_agent>"), invoke("<waiting_agent>")].
+      Pick the best answer agent (faq, context_docs, or fallback).
+      The second step re-asks the pending confirmation after answering.
+   c) utterance_type=LEGAL_NARRATIVE:
+      Plan: [invoke("narrative_collection"), invoke("<waiting_agent>")].
+      Let them continue their story, then re-surface the confirmation.
+   The WAITING_CONFIRM agent MUST appear in the plan in all three cases above.
+
 1. FAREWELL — If utterance_type=FAREWELL AND no primary goals are still in progress
    (i.e. scheduling has COMPLETED or "scheduling" is not in AVAILABLE AGENTS), plan
    ONLY: [invoke("farewell")].
@@ -314,39 +327,6 @@ class Planner:
         utt_class = classify_utterance(utterance, recent_history)
         self.last_utterance_class = utt_class
 
-        # WAITING_CONFIRM enforcement — relaxed for LEGAL_NARRATIVE utterances.
-        # For field data and control signals, keep the hard bypass.
-        # For legal narratives, route to narrative_collection first so the caller
-        # can share their story, then re-surface the pending confirmation.
-        waiting_id = graph.active_waiting_confirm()
-        if waiting_id:
-            if utt_class == "LEGAL_NARRATIVE":
-                available_ids = {n.id for n in graph.available_nodes()}
-                steps: list[PlanStep] = []
-                if "narrative_collection" in available_ids:
-                    steps.append(PlanStep(
-                        action="invoke",
-                        agent_id="narrative_collection",
-                        reason="narrative_before_confirm",
-                    ))
-                steps.append(PlanStep(
-                    action="invoke",
-                    agent_id=waiting_id,
-                    reason="waiting_confirm_follow_up",
-                    use_empty_utterance=True,
-                ))
-                logger.info(
-                    "Planner: WAITING_CONFIRM active but LEGAL_NARRATIVE — "
-                    "routing narrative_collection first, then %s", waiting_id,
-                )
-                return steps
-            else:
-                logger.info(
-                    "Planner: WAITING_CONFIRM enforced → %s (class=%s, LLM bypassed)",
-                    waiting_id, utt_class,
-                )
-                return [PlanStep(action="invoke", agent_id=waiting_id, reason="waiting_confirm")]
-
         available = graph.available_nodes()
         if not available:
             logger.warning("Planner: no available agents — defaulting to data_collection")
@@ -458,6 +438,9 @@ class Planner:
                 logger.warning("Planner produced no invoke steps — using fallback")
                 steps = self._fallback_plan(available_ids)
 
+            # Post-plan validator: enforce WAITING_CONFIRM is addressed
+            steps = self._validate_waiting_confirm(steps)
+
             logger.info(
                 "Planner | type=%s | thinking=%r | steps=%s | utterance=%r",
                 utterance_type,
@@ -469,7 +452,8 @@ class Planner:
 
         except Exception as exc:
             logger.error("Planner LLM call failed: %s — using fallback plan", exc)
-            return self._fallback_plan(available_ids)
+            fallback = self._fallback_plan(available_ids)
+            return self._validate_waiting_confirm(fallback)
 
     def combine_speaks(self, speaks: list[tuple[str, str, float]]) -> str:
         """
@@ -618,6 +602,43 @@ class Planner:
                 truncated = content[:200] + ("..." if len(content) > 200 else "")
                 lines.append(f"  {role}: {truncated}")
         return "\n".join(lines)
+
+    def _validate_waiting_confirm(self, steps: list[PlanStep]) -> list[PlanStep]:
+        """
+        Post-plan safety net: ensure WAITING_CONFIRM agent is in every plan.
+
+        Two cases:
+        1. Waiting agent is the ONLY invoke step (direct yes/no response):
+           → keep use_empty_utterance=False so "yes"/"no" is passed through.
+        2. Waiting agent appears after other invoke steps, or is missing entirely
+           (interrupt pattern — answer first, re-surface confirmation after):
+           → set use_empty_utterance=True so the agent re-asks its pending question.
+        """
+        waiting_id = self._graph.active_waiting_confirm()
+        if not waiting_id:
+            return steps
+
+        invoke_steps = [s for s in steps if s.action == "invoke"]
+        waiting_step = next((s for s in invoke_steps if s.agent_id == waiting_id), None)
+        other_agents = [s for s in invoke_steps if s.agent_id != waiting_id]
+
+        if waiting_step is None:
+            # Missing from plan — inject as final step (re-surface after interrupt)
+            logger.info(
+                "Planner validator: WAITING_CONFIRM (%s) missing from plan — injecting",
+                waiting_id,
+            )
+            steps.append(PlanStep(
+                action="invoke",
+                agent_id=waiting_id,
+                reason="waiting_confirm_reinjected",
+                use_empty_utterance=True,
+            ))
+        elif other_agents:
+            # Other agents in plan → waiting agent is a re-surface, not a yes/no handler
+            waiting_step.use_empty_utterance = True
+
+        return steps
 
     def _fallback_plan(self, available_ids: set[str]) -> list[PlanStep]:
         """Fallback when the LLM call fails or produces no invoke steps."""

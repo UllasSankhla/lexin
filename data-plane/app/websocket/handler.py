@@ -460,6 +460,29 @@ async def handle_call(
             logger.warning("Parallel FAQ query failed: %s", exc)
         return None
 
+    # ── Parallel step execution helpers ──────────────────────────────────────
+
+    # Agents that can safely run concurrently with a primary goal agent —
+    # they answer a question from the utterance while the primary re-surfaces
+    # its own pending state (use_empty_utterance=True).
+    _PARALLEL_ANSWER_AGENTS = frozenset({"faq", "context_docs", "fallback", "empathy"})
+    _PARALLEL_PRIMARY_AGENTS = frozenset({
+        "data_collection", "narrative_collection", "scheduling",
+        "intake_qualification",
+    })
+
+    def _can_parallelize_steps(step_a, step_b) -> bool:
+        """Return True if two consecutive invoke steps can run concurrently."""
+        a, b = step_a.agent_id, step_b.agent_id
+        if not a or not b:
+            return False
+        # answer agent + primary re-surface (primary uses empty utterance)
+        if a in _PARALLEL_ANSWER_AGENTS and b in _PARALLEL_PRIMARY_AGENTS:
+            return getattr(step_b, "use_empty_utterance", False)
+        if b in _PARALLEL_ANSWER_AGENTS and a in _PARALLEL_PRIMARY_AGENTS:
+            return getattr(step_a, "use_empty_utterance", False)
+        return False
+
     async def _process_utterance(caller_text: str) -> None:
         nonlocal collected_all, booking_result, notes_buffer
         if session.state_machine.is_terminal():
@@ -485,11 +508,10 @@ async def handle_call(
             )
             utt_class = planner.last_utterance_class
 
-            # ── Fix 5: Parallel invocation for BOTH utterances ────────────────
+            # ── Parallel invocation for BOTH utterances ───────────────────────
             # When the caller's utterance contains both field data and legal
             # narrative, run data_collection and narrative_collection in parallel
-            # and combine using confidence scores. Only applies when no
-            # WAITING_CONFIRM is active (Fix 4 handles that case via the planner).
+            # and combine using confidence scores.
             if utt_class == "BOTH" and not graph.active_waiting_confirm():
                 speak_text, finalize_reason = await _invoke_parallel_both(
                     caller_text, current_turn, loop, call_history
@@ -508,20 +530,95 @@ async def handle_call(
                 return
 
             # ── Execute each step in the plan ─────────────────────────────────
+            # Steps are executed in groups. Consecutive invoke steps that are
+            # parallel-safe (answer agent + primary re-surface) run concurrently
+            # via asyncio.gather; all other steps execute sequentially.
             speaks: list[tuple[str, str, float]] = []  # (speak_text, agent_id, confidence)
             finalize_reason = None
             agent_id = "unknown"
             waiting_confirm_speak: str | None = None
 
+            # Separate reset_fields (applied immediately) from invoke steps
+            invoke_steps = []
             for step in steps:
                 if step.action == "reset_fields" and step.fields:
-                    # State mutation tool: clear fields from collected + agent state
                     planner.reset_fields(step.fields, collected_all)
-
                 elif step.action == "invoke" and step.agent_id:
+                    invoke_steps.append(step)
+
+            # Build parallel groups from consecutive parallelizable pairs
+            groups: list[list] = []
+            i = 0
+            while i < len(invoke_steps):
+                if (
+                    i + 1 < len(invoke_steps)
+                    and _can_parallelize_steps(invoke_steps[i], invoke_steps[i + 1])
+                ):
+                    groups.append([invoke_steps[i], invoke_steps[i + 1]])
+                    i += 2
+                else:
+                    groups.append([invoke_steps[i]])
+                    i += 1
+
+            for group in groups:
+                if finalize_reason is not None:
+                    break
+
+                if len(group) == 2:
+                    # ── Parallel group (answer + primary re-surface) ──────────
+                    step_a, step_b = group
+                    utt_a = "" if getattr(step_a, "use_empty_utterance", False) else caller_text
+                    utt_b = "" if getattr(step_b, "use_empty_utterance", False) else caller_text
+
+                    # Set up resume stack for any interrupt-eligible agents
+                    for gs in group:
+                        node = graph.nodes.get(gs.agent_id)
+                        if node and node.interrupt_eligible:
+                            primary_id = planner.active_primary_for_resume()
+                            if primary_id:
+                                planner.push_resume(primary_id)
+
+                    results = await asyncio.gather(
+                        _invoke_and_follow(step_a.agent_id, utt_a, current_turn, loop, call_history),
+                        _invoke_and_follow(step_b.agent_id, utt_b, current_turn, loop, call_history),
+                        return_exceptions=True,
+                    )
+                    logger.info(
+                        "Parallel steps executed: %s + %s",
+                        step_a.agent_id, step_b.agent_id,
+                    )
+
+                    parallel_speaks: list[tuple[str, str, float]] = []
+                    for idx, res in enumerate(results):
+                        gs = group[idx]
+                        agent_id = gs.agent_id
+                        if isinstance(res, Exception):
+                            logger.warning(
+                                "Parallel step %s raised: %s", agent_id, res
+                            )
+                            continue
+                        s_speak, s_fr, s_conf = res
+                        if s_fr is not None:
+                            finalize_reason = s_fr
+                        ag_state = graph.states.get(agent_id)
+                        if ag_state and ag_state.status == AgentStatus.WAITING_CONFIRM:
+                            # Re-surface confirmation question always wins
+                            combined_prior = planner.combine_speaks(speaks + parallel_speaks)
+                            waiting_confirm_speak = (combined_prior + " " + s_speak).strip() if combined_prior else s_speak
+                            break
+                        if s_speak:
+                            parallel_speaks.append((s_speak, agent_id, s_conf))
+
+                    if waiting_confirm_speak is not None:
+                        break
+
+                    speaks.extend(parallel_speaks)
+
+                else:
+                    # ── Sequential step ───────────────────────────────────────
+                    step = group[0]
                     agent_id = step.agent_id
 
-                    # Push active primary onto resume stack if this is an interrupt
                     node = graph.nodes.get(agent_id)
                     if node and node.interrupt_eligible:
                         primary_id = planner.active_primary_for_resume()
@@ -536,7 +633,6 @@ async def handle_call(
                     # WAITING_CONFIRM takes absolute priority — capture and stop
                     agent_state = graph.states.get(agent_id)
                     if agent_state and agent_state.status == AgentStatus.WAITING_CONFIRM:
-                        # Combine any prior speaks with the confirmation question
                         if speaks:
                             prior = planner.combine_speaks(speaks)
                             waiting_confirm_speak = (prior + " " + step_speak).strip()
@@ -551,7 +647,7 @@ async def handle_call(
 
                     if step_fr is not None:
                         finalize_reason = step_fr
-                        break  # farewell or completion — stop executing further steps
+                        break
 
             consecutive_errors[0] = 0
 
