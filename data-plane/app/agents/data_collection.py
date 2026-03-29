@@ -271,6 +271,17 @@ EXTRACTION RULES
    corrected field in pending_confirmation; put other extracted values in
    the extracted dict.
 
+   PARTIAL CORRECTION — when the caller corrects only PART of a field value
+   (e.g. pending phone is "two zero six seven seven nine one four six" and
+   caller says "No, it's four one four six" meaning only the last 4 digits
+   differ), use Rule 5B PARTIAL DATA RECONSTRUCTION to combine the corrected
+   segment with the confirmed parts from transcript history. For phone:
+   - Use area code and middle digits from the prior read-back in the transcript.
+   - Replace only the digits the caller specified as wrong.
+   - Put the fully reconstructed 10-digit number in pending_confirmation.
+   Never store a partial segment (e.g. "4146") as the field value — always
+   assemble the complete value before setting pending_confirmation.
+
 5. INCOMPLETE UTTERANCE AND PARTIAL DATA RECONSTRUCTION:
 
    A. SENTENCE CONTINUATION: If the caller's speech seems cut off mid-sentence
@@ -368,6 +379,18 @@ since you haven't confirmed anything yet.
   GOOD: "I have Sarah Mitchell — is that correct?"
   GOOD: "Just to confirm, your email is sarah dot mitchell at gmail dot com. Is that correct?"
   BAD:  "Got it, Sarah Mitchell. Is that correct?" — contradicts itself
+
+SINGLE QUESTION RULE — CRITICAL:
+When setting pending_confirmation (value awaiting yes/no), your speak MUST
+contain ONLY the read-back question for that pending value.
+Do NOT add a next-field question, a MetLife question, or any other request in
+the same speak. One question at a time. The next field is asked in the turn
+AFTER the confirmation is received.
+
+  GOOD: "I have your phone number as two zero six, seven seven nine, four one
+         four six — is that correct?"
+  BAD:  "I have your phone number as ... — is that correct? Also, do you have
+         a MetLife ID?" ← two questions; the caller's yes/no becomes ambiguous
 
 After a confirmation is resolved (yes/no/correction), if there are still
 uncollected fields, your speak MUST seamlessly continue to the next field
@@ -651,8 +674,6 @@ class DataCollectionAgent(AgentBase):
 
             elif result.intent == "correction":
                 correction = result.correction_value
-                internal_state["pending_confirmation"] = None
-                pending = None
                 if correction:
                     param = self._find_param(parameters, field_name)
                     is_valid, msg_or_val = (
@@ -660,20 +681,31 @@ class DataCollectionAgent(AgentBase):
                     )
                     if not is_valid:
                         logger.info(
-                            "DataCollection: correction validation failed for %s: %s",
+                            "DataCollection: correction validation failed for %s: %s — "
+                            "preserving original pending_confirmation",
                             field_name, msg_or_val,
                         )
+                        # Do NOT clear pending_confirmation — the original value is still
+                        # valid and must not be lost because a bad correction was attempted.
                         return SubagentResponse(
-                            status=AgentStatus.IN_PROGRESS,
+                            status=AgentStatus.WAITING_CONFIRM,
                             speak=f"{msg_or_val} Could you try again?",
                             internal_state=internal_state,
+                            pending_confirmation=pending,
                             confidence=0.7,
                         )
                     logger.info(
                         "DataCollection: correction for %s -> %r (validated)",
                         field_name, msg_or_val,
                     )
-                    # The corrected value flows through Step C via result.pending_confirmation
+                    # Correction is valid — now clear the old pending so the corrected
+                    # value can flow through Step C via result.pending_confirmation.
+                    internal_state["pending_confirmation"] = None
+                    pending = None
+                else:
+                    # No correction value supplied — clear pending and re-ask normally
+                    internal_state["pending_confirmation"] = None
+                    pending = None
 
         # ── Step B: Handle extracted values ───────────────────────────────────
         # Non-empty values that aren't the immediate pending_confirmation are
