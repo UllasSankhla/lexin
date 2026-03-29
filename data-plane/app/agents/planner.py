@@ -116,7 +116,7 @@ def classify_utterance(utterance: str, recent_history: list[dict] | None = None)
     user_msg = f'{history_block}CALLER JUST SAID: "{utterance}"\n\nClassify this utterance.'
 
     try:
-        result = llm_json_call(_CLASSIFY_SYSTEM, user_msg, max_tokens=32)
+        result = llm_json_call(_CLASSIFY_SYSTEM, user_msg, max_tokens=512)
         raw = result.get("class", "FIELD_DATA")
         if raw in ("FIELD_DATA", "LEGAL_NARRATIVE", "BOTH", "CONTROL"):
             return raw  # type: ignore[return-value]
