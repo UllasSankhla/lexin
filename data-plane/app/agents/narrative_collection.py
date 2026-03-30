@@ -205,6 +205,7 @@ class NarrativeCollectionAgent(AgentBase):
                 DoneIntentSignal,
                 max_tokens=256,
                 history=history,
+                tag="narrative_done_intent",
             )
             logger.debug("NarrativeCollection: done_intent=%s for %r", result.done, utterance[:60])
             return result.done

@@ -69,7 +69,7 @@ class EmpathyAgent(AgentBase):
         else:
             user_msg = f'Caller said: "{utterance}"\n\nGenerate a brief empathetic acknowledgment.'
             try:
-                speak = llm_text_call(_SYSTEM, user_msg, max_tokens=150)
+                speak = llm_text_call(_SYSTEM, user_msg, max_tokens=150, tag="empathy")
             except Exception as exc:
                 logger.warning("EmpathyAgent LLM call failed: %s — using fallback", exc)
                 speak = _FALLBACKS[_fallback_idx % len(_FALLBACKS)]

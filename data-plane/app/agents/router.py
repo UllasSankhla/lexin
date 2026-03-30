@@ -85,6 +85,7 @@ class Router:
                 user_msg,
                 RouterDecision,
                 max_tokens=workflow.decider.max_tokens,
+                tag="router",
             )
             agent_id = result.agent_id
             interrupt = result.interrupt

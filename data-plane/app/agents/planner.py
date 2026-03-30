@@ -328,7 +328,7 @@ class Planner:
 
         try:
             result = llm_structured_call(
-                _MULTI_INTENT_SYSTEM, user_msg, MultiIntentLLMResponse, max_tokens=1024
+                _MULTI_INTENT_SYSTEM, user_msg, MultiIntentLLMResponse, max_tokens=1024, tag="planner"
             )
 
             steps = self._build_steps_from_intents(result.intents, available_ids)

@@ -40,6 +40,7 @@ class ContextDocsAgent(AgentBase):
                 _ANSWER_SYSTEM,
                 f"DOCUMENTS:\n{docs_text}\n\nCALLER QUESTION: \"{utterance}\"",
                 ContextDocsResult,
+                tag="context_docs",
             )
             if result.found and result.answer:
                 return SubagentResponse(

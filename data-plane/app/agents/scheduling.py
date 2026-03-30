@@ -43,7 +43,7 @@ def _detect_confirmation(utterance: str, slot_desc: str = "") -> str:
     context = f'Slot offered: "{slot_desc}"\n' if slot_desc else ""
     user_msg = f'{context}Caller said: "{utterance}"'
     try:
-        result = llm_structured_call(_CONFIRM_INTENT_SYSTEM, user_msg, SlotConfirmSignal, max_tokens=64)
+        result = llm_structured_call(_CONFIRM_INTENT_SYSTEM, user_msg, SlotConfirmSignal, max_tokens=64, tag="scheduling_confirm_intent")
         logger.debug("SchedulingAgent: confirm_intent=%r for %r", result.intent, utterance[:60])
         return result.intent
     except Exception as exc:
@@ -93,7 +93,7 @@ class SchedulingAgent(AgentBase):
             s.description if hasattr(s, "description") else s["description"]
             for s in slots_data
         )
-        return llm_text_call(_SPEAK_SLOTS_SYSTEM, f"Slots: {slot_list}")
+        return llm_text_call(_SPEAK_SLOTS_SYSTEM, f"Slots: {slot_list}", tag="scheduling_slots_speak")
 
     def _present_slots(self, utterance: str, internal_state: dict, config: dict) -> SubagentResponse:
         # Use pre-fetched slots if CalendarPrefetchTool already ran concurrently
@@ -124,6 +124,7 @@ class SchedulingAgent(AgentBase):
                         f"Purpose: \"{purpose}\"\nEvent types:\n" +
                         "\n".join(f"{i}. {et['name']}" + (f" — {et['description']}" if et.get('description') else "") for i, et in enumerate(event_types)),
                         EventTypeMatch,
+                        tag="scheduling_event_match",
                     )
                     if result.index is not None and 0 <= int(result.index) < len(event_types):
                         matched_uri = event_types[int(result.index)]["event_type_uri"]
@@ -187,6 +188,7 @@ class SchedulingAgent(AgentBase):
                     user_msg,
                     SlotChoice,
                     history=llm_history,
+                    tag="scheduling_slot_choice",
                 )
                 slot_num = result.slot
                 if slot_num is not None:
@@ -200,6 +202,7 @@ class SchedulingAgent(AgentBase):
                             "Generate a single voice sentence confirming a chosen appointment slot and asking for final confirmation.",
                             f"Slot: {chosen['description']}\nPattern: 'I'll book you for [slot]. Shall I confirm?'",
                             history=llm_history,
+                            tag="scheduling_slot_confirm_speak",
                         )
                         llm_history.add("user", user_msg)
                         llm_history.add("assistant", speak)
@@ -221,6 +224,7 @@ class SchedulingAgent(AgentBase):
                 "Return JSON: {\"start_time\": \"ISO\", \"end_time\": \"ISO\"} or {\"found\": false}.",
                 f"Caller said: \"{utterance}\"",
                 DateRangePreference,
+                tag="scheduling_date_pref",
             )
             if pref.start_time and pref.end_time:
                 from datetime import datetime as dt
@@ -266,6 +270,7 @@ class SchedulingAgent(AgentBase):
             speak = llm_text_call(
                 "Generate a voice sentence confirming an appointment slot and asking for final confirmation.",
                 f"Slot: {chosen['description']}",
+                tag="scheduling_max_retry_speak",
             )
             return SubagentResponse(
                 status=AgentStatus.WAITING_CONFIRM,

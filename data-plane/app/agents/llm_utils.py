@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import anthropic
 import openai as openai_sdk
@@ -36,8 +36,32 @@ def _get_client():
     return _client
 
 
-def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, temperature: float) -> str:
-    """Route a chat completion through the configured provider and return content text."""
+class _LLMRaw(NamedTuple):
+    content: str
+    input_tokens: int
+    output_tokens: int
+
+
+def _extract_tokens(response, provider: str) -> tuple[int, int]:
+    """Return (input_tokens, output_tokens) from any provider response."""
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return 0, 0
+    if provider == "anthropic":
+        return getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0)
+    return getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0)
+
+
+def _log_metrics(tag: str, latency_ms: float, input_tokens: int, output_tokens: int) -> None:
+    """Emit a single structured log line for every LLM call."""
+    logger.info(
+        "LLM | tag=%-30s | ms=%6.0f | in=%5d | out=%4d",
+        tag, latency_ms, input_tokens, output_tokens,
+    )
+
+
+def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, temperature: float) -> _LLMRaw:
+    """Route a chat completion through the configured provider and return an _LLMRaw."""
     provider = settings.llm_provider
     client = _get_client()
     if provider == "anthropic":
@@ -49,7 +73,8 @@ def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, tempera
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return response.content[0].text if response.content else ""
+        content = response.content[0].text if response.content else ""
+        in_tok, out_tok = _extract_tokens(response, provider)
     elif provider == "openai":
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         response = _call_with_retry(
@@ -58,7 +83,8 @@ def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, tempera
             messages=full_messages,
             max_completion_tokens=max_tokens,
         )
-        return response.choices[0].message.content if response.choices else ""
+        content = response.choices[0].message.content if response.choices else ""
+        in_tok, out_tok = _extract_tokens(response, provider)
     else:
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         response = _call_with_retry(
@@ -68,7 +94,9 @@ def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, tempera
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return response.choices[0].message.content if response.choices else ""
+        content = response.choices[0].message.content if response.choices else ""
+        in_tok, out_tok = _extract_tokens(response, provider)
+    return _LLMRaw(content, in_tok, out_tok)
 
 
 # ── Conversation history ──────────────────────────────────────────────────────
@@ -144,6 +172,7 @@ def llm_json_call(
     user_message: str,
     max_tokens: int = 1024,
     history: ConversationHistory | None = None,
+    tag: str = "llm_json",
 ) -> dict:
     """
     Single LLM call that returns a parsed JSON dict.
@@ -151,12 +180,14 @@ def llm_json_call(
     All agents and the router use this.
     """
     t0 = time.monotonic()
-    content = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.2)
+    raw = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.2)
     latency_ms = (time.monotonic() - t0) * 1000
+    _log_metrics(tag, latency_ms, raw.input_tokens, raw.output_tokens)
 
-    if not content:
+    if not raw.content:
         logger.error("llm_json_call received empty/None content from LLM")
         raise ValueError("LLM returned empty content")
+    content = raw.content
 
     text = content.strip()
     logger.debug("llm_json_call latency=%.0fms response=%r", latency_ms, text[:200])
@@ -248,6 +279,7 @@ def llm_structured_call(
     response_model: type,
     max_tokens: int = 1024,
     history: ConversationHistory | None = None,
+    tag: str = "llm_structured",
 ) -> object:
     """
     Single LLM call that returns a validated Pydantic model instance.
@@ -271,6 +303,8 @@ def llm_structured_call(
             max_completion_tokens=max_tokens,
         )
         latency_ms = (time.monotonic() - t0) * 1000
+        in_tok, out_tok = _extract_tokens(response, provider)
+        _log_metrics(tag, latency_ms, in_tok, out_tok)
         content = response.choices[0].message.content if response.choices else None
         if not content:
             raise ValueError("LLM returned empty content")
@@ -296,6 +330,7 @@ def llm_structured_call(
             temperature=0.1,
         )
         raw_content = response.content[0].text if response.content else ""
+        in_tok, out_tok = _extract_tokens(response, provider)
 
         # If the model ignored the prefill, retry with an explicit correction.
         if raw_content and not raw_content.lstrip().startswith("{"):
@@ -314,6 +349,8 @@ def llm_structured_call(
                 temperature=0.1,
             )
             raw_content = retry_resp.content[0].text if retry_resp.content else raw_content
+            r_in, r_out = _extract_tokens(retry_resp, provider)
+            in_tok, out_tok = in_tok + r_in, out_tok + r_out
 
         # Prepend `{` if the API omitted it (continuation mode).
         stripped = raw_content.lstrip() if raw_content else ""
@@ -339,8 +376,10 @@ def llm_structured_call(
             },
         )
         raw_content = response.choices[0].message.content if response.choices else ""
+        in_tok, out_tok = _extract_tokens(response, provider)
 
     latency_ms = (time.monotonic() - t0) * 1000
+    _log_metrics(tag, latency_ms, in_tok, out_tok)
 
     content = raw_content
     if not content:
@@ -386,14 +425,16 @@ def llm_text_call(
     user_message: str,
     max_tokens: int = 1024,
     history: ConversationHistory | None = None,
+    tag: str = "llm_text",
 ) -> str:
     """Single LLM call returning plain text. Used for speak generation."""
     t0 = time.monotonic()
-    content = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.3)
+    raw = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.3)
     latency_ms = (time.monotonic() - t0) * 1000
-    if not content:
+    _log_metrics(tag, latency_ms, raw.input_tokens, raw.output_tokens)
+    if not raw.content:
         logger.error("llm_text_call received empty/None content from LLM")
         return ""
-    text = content.strip()
+    text = raw.content.strip()
     logger.debug("llm_text_call latency=%.0fms response=%r", latency_ms, text[:200])
     return text

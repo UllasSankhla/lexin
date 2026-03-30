@@ -40,6 +40,7 @@ class FAQAgent(AgentBase):
                 _LEGAL_DEFLECT_SYSTEM,
                 f"Caller asked: \"{utterance}\"",
                 LegalDeflectSignal,
+                tag="faq_deflect",
             )
             if legal_check.is_legal_question:
                 speak = (
@@ -71,6 +72,7 @@ class FAQAgent(AgentBase):
                 _MATCH_SYSTEM,
                 f"FAQ list:\n{faq_list}\n\nCaller asked: \"{utterance}\"",
                 FAQMatchResult,
+                tag="faq_match",
             )
             if match.matched and match.index is not None:
                 idx = int(match.index)
@@ -79,6 +81,7 @@ class FAQAgent(AgentBase):
                     answer = llm_text_call(
                         "You are an AI receptionist answering a caller's question. Be concise and conversational.",
                         f"FAQ answer to use: {faq['answer']}\nRephrase naturally for voice. Two sentences max.",
+                        tag="faq_answer",
                     )
                     return SubagentResponse(
                         status=AgentStatus.COMPLETED,

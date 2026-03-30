@@ -696,6 +696,7 @@ class DataCollectionAgent(AgentBase):
                 DataCollectionLLMResponse,
                 max_tokens=2048,
                 history=llm_history,
+                tag="dc_extract",
             )
             logger.debug(
                 "DC LLM: utt=%r intent=%s status=%s pending=%s extracted=%s",
@@ -1081,6 +1082,7 @@ class DataCollectionAgent(AgentBase):
                 user_msg,
                 ConfirmationSignal,
                 max_tokens=256,
+                tag="dc_confirm_classify",
             )
         except Exception as exc:
             logger.warning("Confirmation classifier failed (%s) — defaulting to mega-prompt", exc)

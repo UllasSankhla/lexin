@@ -134,7 +134,7 @@ class FallbackAgent(AgentBase):
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
         try:
-            speak = llm_text_call(system, user_msg, max_tokens=1024, history=llm_history)
+            speak = llm_text_call(system, user_msg, max_tokens=1024, history=llm_history, tag="fallback")
         except Exception as exc:
             logger.warning("FallbackAgent LLM call failed: %s", exc)
             speak = (

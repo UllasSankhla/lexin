@@ -207,6 +207,7 @@ class IntakeQualificationAgent(AgentBase):
                 user_message,
                 QualificationResult,
                 max_tokens=1024,
+                tag="intake_qualify",
             )
             decision = result.decision
             matched_area = result.matched_area or None
@@ -246,7 +247,7 @@ class IntakeQualificationAgent(AgentBase):
             ]
             areas_str = ", ".join(area_names) if area_names else "general legal matters"
             user_msg = f"Caller's matter: {reason}\nFirm's supported practice areas: {areas_str}"
-            speak = llm_text_call(speak_system, user_msg) or (
+            speak = llm_text_call(speak_system, user_msg, tag="intake_reject_speak") or (
                 f"I'm sorry, but we're unable to assist with that type of matter. "
                 f"Our firm focuses on {areas_str}. "
                 f"We wish you the best and hope you find the right help."
