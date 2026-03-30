@@ -36,6 +36,12 @@ def _call_with_retry(client, **kwargs) -> object:
                 return client.chat.completions.create(**kwargs)
         except Exception as exc:
             last_exc = exc
+            # Never retry client errors (4xx) — they indicate a bad request that
+            # will not succeed on retry (wrong schema, invalid param, auth failure…).
+            status = getattr(exc, "status_code", None)
+            if status is not None and 400 <= status < 500:
+                logger.error("LLM client error %d — not retrying (%s)", status, exc)
+                raise
             if delay is None:
                 logger.error(
                     "LLM all %d retries exhausted — giving up (%s)",

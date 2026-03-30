@@ -11,7 +11,7 @@ import logging
 import re
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.data_collection_schema import DataCollectionLLMResponse
+from app.agents.data_collection_schema import ConfirmationSignal, DataCollectionLLMResponse
 from app.agents.llm_utils import llm_structured_call, ConversationHistory
 
 logger = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ EXTRACTION RULES
 1. OUT-OF-ORDER: Extract any field the caller mentions, even if it is not the
    field currently being asked for or pending confirmation.
    - If the caller provides field 3 while field 1 is pending confirmation:
-     extract field 3 into the extracted dict, keep the pending confirmation, and
+     extract field 3 into the extracted list, keep the pending confirmation, and
      re-ask for the pending confirmation in the same response.
    - If the caller provides a value for the field that IS pending confirmation:
      treat it as a correction (intent=correction) — update the pending value and
@@ -269,7 +269,7 @@ EXTRACTION RULES
    A correction utterance may also contain values for OTHER fields — apply
    Rule 2 (multiple fields at once) even during a correction. Put the
    corrected field in pending_confirmation; put other extracted values in
-   the extracted dict.
+   the extracted list.
 
    PARTIAL CORRECTION — when the caller corrects only PART of a field value
    (e.g. pending phone is "two zero six seven seven nine one four six" and
@@ -477,7 +477,7 @@ Return ONLY valid JSON matching this exact schema. No markdown. No explanation.
 
 {{
   "intent": "<answer|confirm_yes|confirm_no|correction|skip|off_topic|incomplete_utterance>",
-  "extracted": {{"<field_key>": "<normalized_value>"}},
+  "extracted": [{{"key": "<field_key>", "value": "<normalized_value>"}}],
   "correction_value": "<string or null>",
   "speak": "<voice-friendly, warm, 1-2 sentences — blank if cannot_process>",
   "status": "<in_progress|waiting_confirm|completed|unhandled>",
@@ -494,6 +494,30 @@ Rules:
 - speak is "" when cannot_process=true
 - pending_confirmation is ALWAYS preserved unchanged on unhandled responses
 - Queue only one pending_confirmation at a time; extras wait for the next turn
+"""
+
+
+_CONFIRM_CLASSIFIER_SYSTEM = """\
+The AI is waiting for a caller to confirm or reject a specific value.
+Classify the caller's response into exactly one of four categories:
+
+"confirm"        — pure yes/agreement, no new field data
+                   (e.g. "yes", "yeah", "correct", "that's right", "sounds good")
+
+"reject"         — pure no/disagreement, no new field data
+                   (e.g. "no", "nope", "wrong", "that's not right")
+
+"correct_or_add" — contains new field data (phone digits, email, name, date, etc.)
+                   regardless of whether the caller also agrees or disagrees
+                   (e.g. "no it's 415-555-1234", "yes and my email is...", "four one five...")
+
+"unrelated"      — a question, off-topic remark, or anything that is NOT a yes/no/correction
+                   (e.g. "how long does this take?", "do you need my address?", "what is this for?")
+
+Also set is_affirmative: true if the caller's tone is confirming/agreeing, false if rejecting/correcting.
+Only relevant for "correct_or_add" to help the next processing step.
+
+Respond with JSON only: {"signal": "confirm"|"reject"|"correct_or_add"|"unrelated", "is_affirmative": bool}
 """
 
 
@@ -589,6 +613,40 @@ class DataCollectionAgent(AgentBase):
                 confidence=0.9,
             )
 
+        # ── Confirmation classifier (when a value is awaiting yes/no) ───────────
+        # A dedicated two-boolean LLM call determines whether the utterance is
+        # purely a yes/no control signal or contains new field data.
+        #
+        # Pure yes/no (has_new_data=false):  handled deterministically — no
+        #   mega-prompt call needed, no risk of the model returning intent=answer.
+        #
+        # Contains new data (has_new_data=true): fall through to the mega-prompt
+        #   with a hint so it knows to confirm/reject AND extract the new data.
+        mega_prompt_hint: str = ""
+        if pending:
+            signal = self._classify_confirmation_signal(utterance, pending, parameters)
+            logger.debug(
+                "DC confirm-classifier: signal=%s is_affirmative=%s",
+                signal.signal, signal.is_affirmative,
+            )
+            if signal.signal == "confirm":
+                return self._apply_confirm_yes(
+                    utterance, pending, collected, internal_state, parameters, config
+                )
+            if signal.signal == "reject":
+                return self._apply_confirm_no(
+                    utterance, pending, collected, internal_state, parameters
+                )
+            if signal.signal == "correct_or_add":
+                # Let mega-prompt handle extraction; pass tone hint
+                hint_word = "CONFIRMED" if signal.is_affirmative else "REJECTED"
+                mega_prompt_hint = (
+                    f"[Pre-classified: caller {hint_word} the pending value and "
+                    f"also provided new information. Handle both.] "
+                )
+            # signal == "unrelated": fall through to mega-prompt with no hint
+            # (mega-prompt will return UNHANDLED for off-topic questions)
+
         # ── Mega-prompt LLM call ──────────────────────────────────────────────
         persona = config.get("assistant", {}).get("persona_name", "Assistant")
         workflow_stages = config.get("_workflow_stages", "")
@@ -596,7 +654,7 @@ class DataCollectionAgent(AgentBase):
         policy_docs = config.get("global_policy_documents", [])
         system = _build_mega_prompt(parameters, collected, pending, persona, workflow_stages, call_transcript, policy_docs)
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
-        user_msg = f'Caller said: "{utterance}"'
+        user_msg = f'{mega_prompt_hint}Caller said: "{utterance}"'
 
         try:
             result = llm_structured_call(
@@ -605,6 +663,11 @@ class DataCollectionAgent(AgentBase):
                 DataCollectionLLMResponse,
                 max_tokens=2048,
                 history=llm_history,
+            )
+            logger.debug(
+                "DC LLM: utt=%r intent=%s status=%s pending=%s extracted=%s",
+                utterance[:40], result.intent, result.status,
+                result.pending_confirmation, result.extracted,
             )
         except Exception as exc:
             logger.warning("DataCollection mega-prompt call failed: %s", exc)
@@ -716,7 +779,7 @@ class DataCollectionAgent(AgentBase):
         queue: list[dict] = list(internal_state.get("extraction_queue") or [])
         queued_fields = {q["field"] for q in queue}
 
-        for field_name, value in result.extracted.items():
+        for field_name, value in ((ef.key, ef.value) for ef in result.extracted):
             if field_name in collected:
                 continue
             if value == "":
@@ -944,9 +1007,147 @@ class DataCollectionAgent(AgentBase):
             return False, msg
         return True, value
 
+    def _record_history(self, utterance: str, speak: str, internal_state: dict) -> None:
+        """Add a classifier fast-path turn to llm_history so future mega-prompt calls have context."""
+        history = ConversationHistory.from_list(internal_state.get("llm_history"))
+        history.add("user", f'Caller said: "{utterance}"')
+        history.add("assistant", speak)
+        history_list = history.to_list()
+        if len(history_list) > 8:
+            history_list = history_list[-8:]
+        internal_state["llm_history"] = history_list
+
     @staticmethod
     def _find_param(parameters: list[dict], field_name: str) -> dict | None:
         for p in parameters:
             if p["name"] == field_name:
                 return p
         return None
+
+    def _classify_confirmation_signal(
+        self,
+        utterance: str,
+        pending: dict,
+        parameters: list[dict],
+    ) -> ConfirmationSignal:
+        """
+        Tiny focused LLM call: classify whether the utterance is a pure yes/no
+        control signal or contains new field data (and whether it's affirmative).
+        Falls back to has_new_data=True (safe: sends to mega-prompt) on error.
+        """
+        param = self._find_param(parameters, pending["field"])
+        label = param["display_label"] if param else pending["field"]
+        user_msg = (
+            f'Pending confirmation — {label}: "{pending["value"]}"\n'
+            f'Caller said: "{utterance}"'
+        )
+        try:
+            return llm_structured_call(
+                _CONFIRM_CLASSIFIER_SYSTEM,
+                user_msg,
+                ConfirmationSignal,
+                max_tokens=64,
+            )
+        except Exception as exc:
+            logger.warning("Confirmation classifier failed (%s) — defaulting to mega-prompt", exc)
+            return ConfirmationSignal(signal="correct_or_add", is_affirmative=True)
+
+    def _apply_confirm_yes(
+        self,
+        utterance: str,
+        pending: dict,
+        collected: dict,
+        internal_state: dict,
+        parameters: list[dict],
+        config: dict,
+    ) -> SubagentResponse:
+        """Handle a deterministic 'yes' confirmation without calling the mega-prompt."""
+        field_name = pending["field"]
+        confirmed_value = pending["value"]
+        collected = dict(collected)
+        collected[field_name] = confirmed_value
+        logger.info("DataCollection: confirmed %s = %r (classifier fast-path)", field_name, confirmed_value)
+
+        # Promote next queued extraction if available
+        queue: list[dict] = list(internal_state.get("extraction_queue") or [])
+        new_pending: dict | None = None
+        queue_speak: str | None = None
+        while queue:
+            queued = queue.pop(0)
+            fn = queued["field"]
+            if fn in collected:
+                continue
+            param = self._find_param(parameters, fn)
+            if not param:
+                continue
+            is_valid, msg_or_val = self._validate(param, queued["value"])
+            if is_valid:
+                new_pending = {"field": fn, "value": msg_or_val}
+                queue_speak = self._rephrase_confirmation(new_pending, parameters)
+                logger.info("DataCollection: dequeued %r = %r for confirmation", fn, msg_or_val)
+                break
+
+        internal_state = {
+            **internal_state,
+            "collected": collected,
+            "pending_confirmation": new_pending,
+            "extraction_queue": queue,
+        }
+
+        remaining_all = [p for p in parameters if p["name"] not in collected]
+        if not remaining_all and not new_pending:
+            speak = "Perfect, I have everything I need."
+            self._record_history(utterance, speak, internal_state)
+            return SubagentResponse(
+                status=AgentStatus.COMPLETED,
+                speak=speak,
+                collected=collected,
+                internal_state=internal_state,
+                confidence=1.0,
+            )
+
+        if new_pending:
+            speak = queue_speak or self._rephrase_confirmation(new_pending, parameters)
+            self._record_history(utterance, speak, internal_state)
+            return SubagentResponse(
+                status=AgentStatus.WAITING_CONFIRM,
+                speak=speak,
+                pending_confirmation=new_pending,
+                internal_state=internal_state,
+                confidence=0.95,
+            )
+
+        # Move to next uncollected field
+        next_param = next((p for p in parameters if p["name"] not in collected), None)
+        next_q = self._template_question(next_param) if next_param else "I have all your details."
+        speak = f"Great, and {next_q[0].lower()}{next_q[1:]}" if next_param else "Great — " + next_q
+        self._record_history(utterance, speak, internal_state)
+        return SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak=speak,
+            internal_state=internal_state,
+            confidence=0.95,
+        )
+
+    def _apply_confirm_no(
+        self,
+        utterance: str,
+        pending: dict,
+        collected: dict,
+        internal_state: dict,
+        parameters: list[dict],
+    ) -> SubagentResponse:
+        """Handle a deterministic 'no' rejection without calling the mega-prompt."""
+        field_name = pending["field"]
+        param = self._find_param(parameters, field_name)
+        label = param["display_label"] if param else field_name
+        logger.info("DataCollection: caller rejected value for %s (classifier fast-path)", field_name)
+        internal_state = {**internal_state, "pending_confirmation": None}
+        speak = f"No problem. Could you give me your {label} again?"
+        self._record_history(utterance, speak, internal_state)
+        return SubagentResponse(
+            status=AgentStatus.IN_PROGRESS,
+            speak=speak,
+            internal_state=internal_state,
+            confidence=0.95,
+        )

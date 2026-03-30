@@ -193,6 +193,46 @@ def _try_repair_json(text: str) -> dict | None:
     return result if result else None
 
 
+def _resolve_refs(schema: dict, defs: dict) -> dict:
+    """Recursively inline $ref references and add additionalProperties: false to objects."""
+    if "$ref" in schema:
+        ref_name = schema["$ref"].split("/")[-1]
+        resolved = _resolve_refs(defs.get(ref_name, {}), defs)
+        # Merge any sibling keys (rare in Pydantic output)
+        return {**resolved, **{k: v for k, v in schema.items() if k != "$ref"}}
+
+    result: dict = {}
+    for key, value in schema.items():
+        if key == "$defs":
+            continue  # strip from output — all refs are inlined
+        elif isinstance(value, dict):
+            result[key] = _resolve_refs(value, defs)
+        elif isinstance(value, list):
+            result[key] = [_resolve_refs(v, defs) if isinstance(v, dict) else v for v in value]
+        else:
+            result[key] = value
+
+    if result.get("type") == "object":
+        # Cerebras strict mode requires every object to have `properties` or `anyOf`.
+        # Open-ended dicts (dict[str, T]) only have `additionalProperties` — add an
+        # empty `properties` so the schema is accepted without changing semantics.
+        if "properties" not in result and "anyOf" not in result:
+            result["properties"] = {}
+        # Strict mode also requires additionalProperties: false on fixed-schema objects.
+        # Leave open-ended dicts (those with non-False additionalProperties) untouched.
+        if result.get("additionalProperties") is not False and "additionalProperties" not in result:
+            result["additionalProperties"] = False
+
+    return result
+
+
+def _make_cerebras_schema(model) -> dict:
+    """Convert a Pydantic model to a Cerebras-compatible strict JSON schema."""
+    raw = model.model_json_schema()
+    defs = raw.get("$defs", {})
+    return _resolve_refs(raw, defs)
+
+
 def llm_structured_call(
     system_prompt: str,
     user_message: str,
@@ -231,9 +271,69 @@ def llm_structured_call(
             logger.error("llm_structured_call (openai) validation failed: %s | raw=%r", exc, content[:300])
             raise ValueError(f"LLM structured response validation failed: {exc}") from exc
 
-    content = _llm_call(system_prompt, _build_messages(user_message, history), max_tokens, temperature=0.1)
+    client = _get_client()
+    user_msgs = _build_messages(user_message, history)
+    full_messages = [{"role": "system", "content": system_prompt}] + user_msgs
+
+    if provider == "anthropic":
+        # JSON prefill: append assistant turn starting with `{` to force JSON output.
+        prefill_msgs = user_msgs + [{"role": "assistant", "content": "{"}]
+        response = _call_with_retry(
+            client,
+            model=settings.anthropic_model,
+            system=system_prompt,
+            messages=prefill_msgs,
+            max_tokens=max_tokens,
+            temperature=0.1,
+        )
+        raw_content = response.content[0].text if response.content else ""
+
+        # If the model ignored the prefill, retry with an explicit correction.
+        if raw_content and not raw_content.lstrip().startswith("{"):
+            logger.debug("llm_structured_call: prefill ignored, retrying with JSON correction")
+            correction = (
+                f"{user_message}\n\n"
+                "IMPORTANT: Your previous response was not valid JSON. "
+                'Respond ONLY with a JSON object starting with {"'
+            )
+            retry_resp = _call_with_retry(
+                client,
+                model=settings.anthropic_model,
+                system=system_prompt,
+                messages=user_msgs + [{"role": "user", "content": correction}],
+                max_tokens=max_tokens,
+                temperature=0.1,
+            )
+            raw_content = retry_resp.content[0].text if retry_resp.content else raw_content
+
+        # Prepend `{` if the API omitted it (continuation mode).
+        stripped = raw_content.lstrip() if raw_content else ""
+        if stripped and not stripped.startswith("{"):
+            raw_content = "{" + stripped
+    else:
+        # Cerebras: use native structured outputs (json_schema + strict) —
+        # guarantees valid JSON matching the Pydantic model schema.
+        schema = _make_cerebras_schema(response_model)
+        response = _call_with_retry(
+            client,
+            model=settings.cerebras_model,
+            messages=full_messages,
+            max_tokens=max_tokens,
+            temperature=0.1,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_model.__name__.lower(),
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        )
+        raw_content = response.choices[0].message.content if response.choices else ""
+
     latency_ms = (time.monotonic() - t0) * 1000
 
+    content = raw_content
     if not content:
         raise ValueError("LLM returned empty content")
 
@@ -250,9 +350,7 @@ def llm_structured_call(
                 return response_model.model_validate(repaired)
             except Exception:
                 pass
-        logger.error(
-            "llm_structured_call validation failed: %s | raw=%r", exc, text[:300]
-        )
+        logger.error("llm_structured_call validation failed: %s | raw=%r", exc, text[:300])
         raise ValueError(f"LLM structured response validation failed: {exc}") from exc
 
 
