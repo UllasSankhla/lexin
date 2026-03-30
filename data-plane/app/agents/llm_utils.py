@@ -176,7 +176,16 @@ def llm_json_call(
                 list(repaired.keys()), text[:300],
             )
             return repaired
-        logger.error("llm_json_call JSON parse failed: %s | raw=%r", exc, text[:300])
+        logger.error(
+            "llm_json_call JSON parse failed: %s\n"
+            "  system_prompt: %s\n"
+            "  user_message:  %s\n"
+            "  raw_response:  %s",
+            exc,
+            system_prompt[:500],
+            user_message[:500],
+            text,
+        )
         raise ValueError(f"LLM returned non-JSON: {text[:200]}") from exc
 
 
@@ -335,6 +344,14 @@ def llm_structured_call(
 
     content = raw_content
     if not content:
+        logger.error(
+            "llm_structured_call empty content | model=%s\n"
+            "  system_prompt: %s\n"
+            "  user_message:  %s",
+            response_model.__name__,
+            system_prompt[:500],
+            user_message[:500],
+        )
         raise ValueError("LLM returned empty content")
 
     text = content.strip()
@@ -350,7 +367,17 @@ def llm_structured_call(
                 return response_model.model_validate(repaired)
             except Exception:
                 pass
-        logger.error("llm_structured_call validation failed: %s | raw=%r", exc, text[:300])
+        logger.error(
+            "llm_structured_call validation failed: %s | model=%s\n"
+            "  system_prompt: %s\n"
+            "  user_message:  %s\n"
+            "  raw_response:  %s",
+            exc,
+            response_model.__name__,
+            system_prompt[:500],
+            user_message[:500],
+            text,
+        )
         raise ValueError(f"LLM structured response validation failed: {exc}") from exc
 
 
