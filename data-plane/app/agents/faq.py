@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call
+from app.agents.llm_utils import llm_structured_call, llm_text_call
+from app.agents.agent_schemas import LegalDeflectSignal, FAQMatchResult
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,12 @@ class FAQAgent(AgentBase):
     ) -> SubagentResponse:
         # Detect and deflect substantive legal questions before attempting FAQ match
         try:
-            legal_check = llm_json_call(
+            legal_check = llm_structured_call(
                 _LEGAL_DEFLECT_SYSTEM,
                 f"Caller asked: \"{utterance}\"",
+                LegalDeflectSignal,
             )
-            if legal_check.get("is_legal_question"):
+            if legal_check.is_legal_question:
                 speak = (
                     "That's a great question for our legal team — I'll make sure to note it "
                     "so the attorney can address it directly in your consultation."
@@ -65,12 +67,13 @@ class FAQAgent(AgentBase):
             f"{i}. Q: {f['question']}" for i, f in enumerate(faqs)
         )
         try:
-            match = llm_json_call(
+            match = llm_structured_call(
                 _MATCH_SYSTEM,
                 f"FAQ list:\n{faq_list}\n\nCaller asked: \"{utterance}\"",
+                FAQMatchResult,
             )
-            if match.get("matched") and match.get("index") is not None:
-                idx = int(match["index"])
+            if match.matched and match.index is not None:
+                idx = int(match.index)
                 if 0 <= idx < len(faqs):
                     faq = faqs[idx]
                     answer = llm_text_call(

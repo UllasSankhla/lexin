@@ -28,7 +28,8 @@ import logging
 import random
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, ConversationHistory
+from app.agents.llm_utils import llm_structured_call, ConversationHistory
+from app.agents.agent_schemas import DoneIntentSignal
 
 logger = logging.getLogger(__name__)
 
@@ -198,15 +199,15 @@ class NarrativeCollectionAgent(AgentBase):
     def _detect_done_intent(self, utterance: str, history: ConversationHistory) -> bool:
         """Return True if the caller indicates they have nothing more to add."""
         try:
-            result = llm_json_call(
+            result = llm_structured_call(
                 _DONE_INTENT_SYSTEM,
                 f"Caller said: \"{utterance}\"",
-                max_tokens=1024,
+                DoneIntentSignal,
+                max_tokens=256,
                 history=history,
             )
-            done = bool(result.get("done", False))
-            logger.debug("NarrativeCollection: done_intent=%s for %r", done, utterance[:60])
-            return done
+            logger.debug("NarrativeCollection: done_intent=%s for %r", result.done, utterance[:60])
+            return result.done
         except Exception as exc:
             logger.warning("NarrativeCollection: done intent detection failed: %s", exc)
             # Default to "not done" on error so we don't prematurely end

@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from app.agents.base import AgentStatus
-from app.agents.llm_utils import llm_json_call
+from app.agents.llm_utils import llm_structured_call
+from app.agents.agent_schemas import UtteranceClassification, PlannerLLMResponse
 from app.agents.workflow import WorkflowGraph
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ Rules:
   describes their situation in the same utterance, classify as BOTH.
 - Default to FIELD_DATA when unsure — it is the safer fallback.
 
-Respond with ONLY valid JSON: {"class": "FIELD_DATA"} (or LEGAL_NARRATIVE, BOTH, CONTROL)
+Respond with ONLY valid JSON: {"utterance_class": "FIELD_DATA"} (or LEGAL_NARRATIVE, BOTH, CONTROL)
 No explanation, no other keys.
 """
 
@@ -116,12 +117,8 @@ def classify_utterance(utterance: str, recent_history: list[dict] | None = None)
     user_msg = f'{history_block}CALLER JUST SAID: "{utterance}"\n\nClassify this utterance.'
 
     try:
-        result = llm_json_call(_CLASSIFY_SYSTEM, user_msg, max_tokens=512)
-        raw = result.get("class", "FIELD_DATA")
-        if raw in ("FIELD_DATA", "LEGAL_NARRATIVE", "BOTH", "CONTROL"):
-            return raw  # type: ignore[return-value]
-        logger.warning("classify_utterance: unexpected class %r — defaulting to FIELD_DATA", raw)
-        return "FIELD_DATA"
+        result = llm_structured_call(_CLASSIFY_SYSTEM, user_msg, UtteranceClassification, max_tokens=64)
+        return result.utterance_class
     except Exception as exc:
         logger.warning("classify_utterance LLM call failed: %s — defaulting to FIELD_DATA", exc)
         return "FIELD_DATA"
@@ -405,33 +402,30 @@ class Planner:
         )
 
         try:
-            result = llm_json_call(_PLANNER_SYSTEM, user_msg, max_tokens=2048)
-            thinking = result.get("thinking", "")
-            utterance_type = result.get("utterance_type", "UNKNOWN")
-            steps_raw = result.get("steps", [])
+            result = llm_structured_call(_PLANNER_SYSTEM, user_msg, PlannerLLMResponse, max_tokens=2048)
+            thinking = result.thinking
+            utterance_type = result.utterance_type
 
             steps: list[PlanStep] = []
-            for s in steps_raw[:_MAX_PLAN_STEPS]:
-                action = s.get("action", "")
-                if action == "invoke":
-                    agent_id = s.get("agent_id")
-                    if agent_id and agent_id in available_ids:
+            for s in result.steps[:_MAX_PLAN_STEPS]:
+                if s.action == "invoke":
+                    if s.agent_id and s.agent_id in available_ids:
                         steps.append(PlanStep(
                             action="invoke",
-                            agent_id=agent_id,
-                            reason=s.get("reason", ""),
+                            agent_id=s.agent_id,
+                            reason=s.reason,
                         ))
-                    elif agent_id:
+                    elif s.agent_id:
                         logger.warning(
-                            "Planner returned unavailable agent %r — skipping step", agent_id
+                            "Planner returned unavailable agent %r — skipping step", s.agent_id
                         )
-                elif action == "reset_fields":
-                    fields = s.get("fields") or []
+                elif s.action == "reset_fields":
+                    fields = s.fields or []
                     if fields:
                         steps.append(PlanStep(
                             action="reset_fields",
                             fields=fields,
-                            reason=s.get("reason", ""),
+                            reason=s.reason,
                         ))
 
             if not any(s.action == "invoke" for s in steps):

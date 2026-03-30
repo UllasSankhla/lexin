@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call
+from app.agents.llm_utils import llm_structured_call, llm_text_call
+from app.agents.agent_schemas import ContextDocsResult
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +36,15 @@ class ContextDocsAgent(AgentBase):
             for cf in context_files
         )
         try:
-            result = llm_json_call(
+            result = llm_structured_call(
                 _ANSWER_SYSTEM,
                 f"DOCUMENTS:\n{docs_text}\n\nCALLER QUESTION: \"{utterance}\"",
+                ContextDocsResult,
             )
-            if result.get("found") and result.get("answer"):
+            if result.found and result.answer:
                 return SubagentResponse(
                     status=AgentStatus.COMPLETED,
-                    speak=result["answer"],
+                    speak=result.answer,
                     internal_state=internal_state,
                 )
         except Exception as exc:

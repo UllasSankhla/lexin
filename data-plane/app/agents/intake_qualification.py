@@ -20,7 +20,8 @@ import logging
 import random
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call
+from app.agents.llm_utils import llm_structured_call, llm_text_call
+from app.agents.agent_schemas import QualificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -201,20 +202,15 @@ class IntakeQualificationAgent(AgentBase):
         matched_area = None
         reason = "Could not determine qualification."
         try:
-            result = llm_json_call(
+            result = llm_structured_call(
                 _QUALIFY_SYSTEM,
                 user_message,
+                QualificationResult,
                 max_tokens=1024,
             )
-            decision = result.get("decision", "ambiguous")
-            matched_area = result.get("matched_area") or None
-            reason = result.get("reason", reason)
-            if decision not in ("qualified", "ambiguous", "not_qualified"):
-                logger.warning(
-                    "IntakeQualification: unexpected decision value %r — treating as ambiguous",
-                    decision,
-                )
-                decision = "ambiguous"
+            decision = result.decision
+            matched_area = result.matched_area or None
+            reason = result.reason or reason
         except Exception as exc:
             logger.warning("IntakeQualification: LLM call failed: %s", exc)
 

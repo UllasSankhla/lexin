@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
-from app.agents.llm_utils import llm_json_call, llm_text_call, ConversationHistory
+from app.agents.llm_utils import llm_structured_call, llm_text_call, ConversationHistory
+from app.agents.agent_schemas import SlotConfirmSignal, EventTypeMatch, SlotChoice, DateRangePreference
 from app.services.calendar_service import list_available_slots, book_time_slot
 
 logger = logging.getLogger(__name__)
@@ -42,11 +43,9 @@ def _detect_confirmation(utterance: str, slot_desc: str = "") -> str:
     context = f'Slot offered: "{slot_desc}"\n' if slot_desc else ""
     user_msg = f'{context}Caller said: "{utterance}"'
     try:
-        result = llm_json_call(_CONFIRM_INTENT_SYSTEM, user_msg, max_tokens=16)
-        intent = result.get("intent", "")
-        if intent in ("confirm", "reject", "new_slot"):
-            logger.debug("SchedulingAgent: confirm_intent=%r for %r", intent, utterance[:60])
-            return intent
+        result = llm_structured_call(_CONFIRM_INTENT_SYSTEM, user_msg, SlotConfirmSignal, max_tokens=64)
+        logger.debug("SchedulingAgent: confirm_intent=%r for %r", result.intent, utterance[:60])
+        return result.intent
     except Exception as exc:
         logger.warning("SchedulingAgent: _detect_confirmation LLM failed: %s — defaulting to new_slot", exc)
     return "new_slot"
@@ -120,14 +119,14 @@ class SchedulingAgent(AgentBase):
             matched_uri = None
             if event_types:
                 try:
-                    result = llm_json_call(
+                    result = llm_structured_call(
                         "Match a booking purpose to an event type. Return JSON: {\"index\": <0-based int>} or {\"index\": null}.",
                         f"Purpose: \"{purpose}\"\nEvent types:\n" +
                         "\n".join(f"{i}. {et['name']}" + (f" — {et['description']}" if et.get('description') else "") for i, et in enumerate(event_types)),
+                        EventTypeMatch,
                     )
-                    idx = result.get("index")
-                    if idx is not None and 0 <= int(idx) < len(event_types):
-                        matched_uri = event_types[int(idx)]["event_type_uri"]
+                    if result.index is not None and 0 <= int(result.index) < len(event_types):
+                        matched_uri = event_types[int(result.index)]["event_type_uri"]
                 except Exception as exc:
                     logger.warning("SchedulingAgent event type match failed: %s", exc)
                 if not matched_uri:
@@ -182,13 +181,14 @@ class SchedulingAgent(AgentBase):
             numbered = "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
             user_msg = f"Available slots:\n{numbered}\nCaller said: \"{utterance}\""
             try:
-                result = llm_json_call(
+                result = llm_structured_call(
                     "Identify which slot the caller chose based on their description. "
                     "Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
                     user_msg,
+                    SlotChoice,
                     history=llm_history,
                 )
-                slot_num = result.get("slot")
+                slot_num = result.slot
                 if slot_num is not None:
                     idx = int(slot_num) - 1
                     if 0 <= idx < len(slots_data):
@@ -216,15 +216,16 @@ class SchedulingAgent(AgentBase):
         # Check for date preference
         current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            pref = llm_json_call(
+            pref = llm_structured_call(
                 f"Today is {current_date}. Convert a natural language time preference to a UTC date range. "
-                "Return JSON: {{\"start_time\": \"ISO\", \"end_time\": \"ISO\"}} or {{\"found\": false}}.",
+                "Return JSON: {\"start_time\": \"ISO\", \"end_time\": \"ISO\"} or {\"found\": false}.",
                 f"Caller said: \"{utterance}\"",
+                DateRangePreference,
             )
-            if pref.get("start_time") and pref.get("end_time"):
+            if pref.start_time and pref.end_time:
                 from datetime import datetime as dt
-                s = dt.fromisoformat(pref["start_time"].replace("Z", "+00:00"))
-                e = dt.fromisoformat(pref["end_time"].replace("Z", "+00:00"))
+                s = dt.fromisoformat(pref.start_time.replace("Z", "+00:00"))
+                e = dt.fromisoformat(pref.end_time.replace("Z", "+00:00"))
                 collected = config.get("_collected", {})
                 purpose = collected.get("purpose") or collected.get("reason") or "appointment"
                 matched_uri = internal_state.get("matched_event_type_uri")

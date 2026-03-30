@@ -35,6 +35,7 @@ from app.agents.narrative_collection import (
     _DONE_INTENT_SYSTEM,
 )
 from app.agents.base import AgentStatus
+from app.agents.agent_schemas import DoneIntentSignal
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -145,14 +146,14 @@ def test_does_not_ask_done_for_short_segments():
 
 # ── [BUG-B] asking_done always completes — never loops ───────────────────────
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=True))
 def test_asking_done_completes_when_done(mock_json):
     """done_intent=True → COMPLETED."""
     resp, _ = _call("No that's all", _asking_done_state())
     assert resp.status == AgentStatus.COMPLETED
 
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": False})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=False))
 def test_asking_done_completes_even_when_not_done(mock_json):
     """
     BUG-B: The old code looped back to collecting when done_intent=False.
@@ -166,7 +167,7 @@ def test_asking_done_completes_even_when_not_done(mock_json):
     )
 
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": False})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=False))
 def test_asking_done_never_returns_in_progress_with_stage_collecting(mock_json):
     """
     Stage must never go back to 'collecting' from 'asking_done'.
@@ -179,7 +180,7 @@ def test_asking_done_never_returns_in_progress_with_stage_collecting(mock_json):
 
 # ── [BUG-D] Segments content when done ───────────────────────────────────────
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=True))
 def test_done_response_not_added_to_segments(mock_json):
     """
     BUG-D: When done_intent=True, the caller's 'No' should NOT be appended
@@ -192,7 +193,7 @@ def test_done_response_not_added_to_segments(mock_json):
     assert len(resp.hidden_collected["full_narrative"].split(". ")) <= original_segment_count + 1
 
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": False})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=False))
 def test_additional_content_added_to_segments_when_not_done(mock_json):
     """When done_intent=False, the utterance IS appended (it's new narrative content)."""
     extra = "I also sustained a back injury and missed three weeks of work."
@@ -224,7 +225,7 @@ def test_done_intent_prompt_has_stop_and_continue_framing():
 
 # ── COMPLETED output ──────────────────────────────────────────────────────────
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=True))
 def test_completed_collected_dict(mock_json):
     """COMPLETED response must include full_narrative in hidden_collected."""
     resp, _ = _call("No", _asking_done_state())
@@ -232,7 +233,7 @@ def test_completed_collected_dict(mock_json):
     assert resp.hidden_collected["full_narrative"]
 
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=True))
 def test_full_narrative_is_segment_join(mock_json):
     """full_narrative must be all segments joined with spaces."""
     segs = ["First part of narrative.", "Second part of narrative."]
@@ -272,7 +273,7 @@ def test_segments_preserved_across_resume():
 
 # ── LLM failure resilience ────────────────────────────────────────────────────
 
-@patch("app.agents.narrative_collection.llm_json_call", side_effect=Exception("timeout"))
+@patch("app.agents.narrative_collection.llm_structured_call", side_effect=Exception("timeout"))
 def test_done_intent_failure_still_completes(mock_json):
     """
     On LLM failure in done_intent, default is not-done (collect utterance).
@@ -282,7 +283,7 @@ def test_done_intent_failure_still_completes(mock_json):
     assert resp.status == AgentStatus.COMPLETED
 
 
-@patch("app.agents.narrative_collection.llm_json_call", return_value={"done": True})
+@patch("app.agents.narrative_collection.llm_structured_call", return_value=DoneIntentSignal(done=True))
 def test_completed_contains_full_narrative(mock_json):
     """On completion, full_narrative in hidden_collected must be non-empty."""
     resp, _ = _call("No", _asking_done_state())

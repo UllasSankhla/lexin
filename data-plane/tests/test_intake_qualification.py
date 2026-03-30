@@ -22,6 +22,7 @@ from app.agents.intake_qualification import (
     _get_referral_suggestion,
 )
 from app.agents.base import AgentStatus
+from app.agents.agent_schemas import QualificationResult
 
 
 # ── Fixtures: Nexus Law — two practice areas only ─────────────────────────────
@@ -162,17 +163,17 @@ class TestDivorceCaseQualification:
 
     def test_divorce_case_returns_failed_status(self):
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": None,
-                "reason": (
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area=None,
+                reason=(
                     "Divorce and family law are not within this firm's practice areas "
                     "of personal injury and employment law."
                 ),
-            }
+            )
             mock_text.return_value = (
                 "I'm sorry to hear about your situation. Unfortunately, divorce and "
                 "family law matters fall outside our practice areas — we'd encourage "
@@ -196,14 +197,14 @@ class TestDivorceCaseQualification:
 
     def test_divorce_case_records_not_qualified_decision(self):
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call"),
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": None,
-                "reason": "Divorce is family law, outside scope.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area=None,
+                reason="Divorce is family law, outside scope.",
+            )
 
             resp = AGENT.process(
                 "",
@@ -220,14 +221,14 @@ class TestDivorceCaseQualification:
     def test_divorce_case_speak_is_non_empty(self):
         """The agent must always speak a refusal — never go silent."""
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": None,
-                "reason": "Family law outside scope.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area=None,
+                reason="Family law outside scope.",
+            )
             mock_text.return_value = (
                 "I'm sorry, divorce matters are outside our practice areas. "
                 "We recommend consulting a family law attorney."
@@ -249,14 +250,14 @@ class TestDivorceCaseQualification:
     def test_divorce_case_speak_is_politely_declining(self):
         """Refusal message must acknowledge the caller's situation and decline politely."""
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": None,
-                "reason": "Divorce / family law not in scope.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area=None,
+                reason="Divorce / family law not in scope.",
+            )
             mock_text.return_value = (
                 "I'm sorry, but divorce matters fall outside our practice areas. "
                 "We recommend consulting a family law attorney."
@@ -282,14 +283,14 @@ class TestDivorceCaseQualification:
     def test_divorce_case_does_not_produce_completed_status(self):
         """COMPLETED would route to scheduling — must never happen for not_qualified."""
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call"),
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": None,
-                "reason": "Divorce outside scope.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area=None,
+                reason="Divorce outside scope.",
+            )
 
             resp = AGENT.process(
                 "",
@@ -309,12 +310,12 @@ class TestDivorceCaseQualification:
 class TestQualifiedPaths:
 
     def test_personal_injury_returns_completed(self):
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
-            mock_json.return_value = {
-                "decision": "qualified",
-                "matched_area": "Personal Injury",
-                "reason": "Car accident on California highway matches personal injury criteria.",
-            }
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
+            mock_json.return_value = QualificationResult(
+                decision="qualified",
+                matched_area="Personal Injury",
+                reason="Car accident on California highway matches personal injury criteria.",
+            )
 
             resp = AGENT.process(
                 "",
@@ -331,12 +332,12 @@ class TestQualifiedPaths:
         assert resp.hidden_collected["matched_area"] == "Personal Injury"
 
     def test_employment_law_returns_completed(self):
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
-            mock_json.return_value = {
-                "decision": "qualified",
-                "matched_area": "Employment Law",
-                "reason": "Wrongful termination and retaliation match employment law criteria.",
-            }
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
+            mock_json.return_value = QualificationResult(
+                decision="qualified",
+                matched_area="Employment Law",
+                reason="Wrongful termination and retaliation match employment law criteria.",
+            )
 
             resp = AGENT.process(
                 "",
@@ -353,12 +354,12 @@ class TestQualifiedPaths:
 
     def test_qualified_case_speaks_calendar_filler(self):
         """Qualified cases should transition by speaking a calendar filler, not a refusal."""
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
-            mock_json.return_value = {
-                "decision": "qualified",
-                "matched_area": "Personal Injury",
-                "reason": "Slip-and-fall on commercial premises in California.",
-            }
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
+            mock_json.return_value = QualificationResult(
+                decision="qualified",
+                matched_area="Personal Injury",
+                reason="Slip-and-fall on commercial premises in California.",
+            )
 
             resp = AGENT.process(
                 "",
@@ -382,12 +383,12 @@ class TestAmbiguousPath:
 
     def test_ambiguous_returns_completed(self):
         """Ambiguous → COMPLETED so a human can assess during the consultation."""
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
-            mock_json.return_value = {
-                "decision": "ambiguous",
-                "matched_area": "Employment Law",
-                "reason": "Caller is a freelancer — employment status unclear.",
-            }
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
+            mock_json.return_value = QualificationResult(
+                decision="ambiguous",
+                matched_area="Employment Law",
+                reason="Caller is a freelancer — employment status unclear.",
+            )
 
             resp = AGENT.process(
                 "",
@@ -409,7 +410,7 @@ class TestLLMErrorHandling:
 
     def test_llm_exception_falls_back_to_ambiguous(self):
         """LLM failure must NOT result in a hard rejection — fall back to ambiguous."""
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
             mock_json.side_effect = ValueError("LLM returned empty content")
 
             resp = AGENT.process(
@@ -423,12 +424,10 @@ class TestLLMErrorHandling:
         assert resp.hidden_collected.get("qualification_decision") == "ambiguous"
 
     def test_unexpected_decision_value_normalised_to_ambiguous(self):
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
-            mock_json.return_value = {
-                "decision": "maybe",  # not a valid value
-                "matched_area": None,
-                "reason": "Not sure.",
-            }
+        # With Pydantic strict validation, invalid enum values raise ValidationError
+        # before the agent sees them — the agent catches this and falls back to ambiguous.
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
+            mock_json.side_effect = ValueError("LLM structured response validation failed: decision")
 
             resp = AGENT.process(
                 "",
@@ -443,14 +442,14 @@ class TestLLMErrorHandling:
     def test_llm_text_call_returns_empty_uses_hardcoded_fallback(self):
         """If the speak-generation LLM call returns empty, use the hardcoded fallback."""
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": None,
-                "reason": "Estate planning outside scope.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area=None,
+                reason="Estate planning outside scope.",
+            )
             mock_text.return_value = ""  # empty → falsy → use fallback
 
             resp = AGENT.process(
@@ -475,14 +474,14 @@ class TestReferralSuggestion:
         must include the referral text so the LLM can mention it naturally.
         """
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": "Employment Law",
-                "reason": "Business-to-business contract dispute, not an employer-employee issue.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area="Employment Law",
+                reason="Business-to-business contract dispute, not an employer-employee issue.",
+            )
             mock_text.return_value = (
                 "Unfortunately this falls outside our scope. "
                 "We recommend the State Bar Lawyer Referral Service."
@@ -504,14 +503,14 @@ class TestReferralSuggestion:
     def test_no_referral_uses_generic_speak_system(self):
         """When matched area has no referral, the generic decline prompt is used."""
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
-            mock_json.return_value = {
-                "decision": "not_qualified",
-                "matched_area": "Personal Injury",  # no referral configured
-                "reason": "Out-of-state matter, not California.",
-            }
+            mock_json.return_value = QualificationResult(
+                decision="not_qualified",
+                matched_area="Personal Injury",  # no referral configured,
+                reason="Out-of-state matter, not California.",
+            )
             mock_text.return_value = "Unfortunately we only handle California matters."
 
             resp = AGENT.process(
@@ -534,7 +533,7 @@ class TestReferralSuggestion:
 class TestAlreadyDecidedGuard:
 
     def test_already_qualified_state_skips_llm(self):
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
             state = {
                 "decision": "qualified",
                 "matched_area": "Personal Injury",
@@ -548,7 +547,7 @@ class TestAlreadyDecidedGuard:
 
     def test_already_not_qualified_state_skips_llm(self):
         with (
-            patch("app.agents.intake_qualification.llm_json_call") as mock_json,
+            patch("app.agents.intake_qualification.llm_structured_call") as mock_json,
             patch("app.agents.intake_qualification.llm_text_call") as mock_text,
         ):
             mock_text.return_value = "We cannot assist with this matter."
@@ -573,12 +572,12 @@ class TestNoPracticeAreas:
         assert "general legal matters" in prompt
 
     def test_no_areas_ambiguous_llm_returns_completed(self):
-        with patch("app.agents.intake_qualification.llm_json_call") as mock_json:
-            mock_json.return_value = {
-                "decision": "ambiguous",
-                "matched_area": None,
-                "reason": "No criteria defined.",
-            }
+        with patch("app.agents.intake_qualification.llm_structured_call") as mock_json:
+            mock_json.return_value = QualificationResult(
+                decision="ambiguous",
+                matched_area=None,
+                reason="No criteria defined.",
+            )
 
             cfg = {
                 "practice_areas": [],

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from app.agents.llm_utils import llm_json_call
+from app.agents.llm_utils import llm_structured_call
+from app.agents.agent_schemas import RouterDecision
 from app.agents.workflow import WorkflowGraph
 
 logger = logging.getLogger(__name__)
@@ -79,14 +80,15 @@ class Router:
         )
 
         try:
-            result = llm_json_call(
+            result = llm_structured_call(
                 workflow.decider.system_prompt,
                 user_msg,
-                workflow.decider.max_tokens,
+                RouterDecision,
+                max_tokens=workflow.decider.max_tokens,
             )
-            agent_id = result.get("agent_id", "")
-            interrupt = bool(result.get("interrupt", False))
-            reasoning = result.get("reasoning", "")
+            agent_id = result.agent_id
+            interrupt = result.interrupt
+            reasoning = result.reasoning
 
             logger.info(
                 "Router decision | agent=%s | interrupt=%s | reasoning=%r\n"
