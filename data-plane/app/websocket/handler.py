@@ -506,29 +506,6 @@ async def handle_call(
             steps = await loop.run_in_executor(
                 None, lambda: planner.plan(caller_text, call_history)
             )
-            utt_class = planner.last_utterance_class
-
-            # ── Parallel invocation for BOTH utterances ───────────────────────
-            # When the caller's utterance contains both field data and legal
-            # narrative, run data_collection and narrative_collection in parallel
-            # and combine using confidence scores.
-            if utt_class == "BOTH" and not graph.active_waiting_confirm():
-                speak_text, finalize_reason = await _invoke_parallel_both(
-                    caller_text, current_turn, loop, call_history
-                )
-                if not speak_text or not speak_text.strip():
-                    speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
-                speak_text = apply_empathy_filter(speak_text, collected_all, transcript_turns)
-                consecutive_errors[0] = 0
-                session.add_assistant_turn(speak_text)
-                transcript_turns.append({"role": "assistant", "content": speak_text})
-                audio_id = f"resp-{seq[0] + 1}"
-                await safe_send_text("server.response_text", {"text": speak_text, "audio_id": audio_id})
-                await transport.send_response(speak_text, audio_id)
-                if finalize_reason is not None:
-                    await _finalize_call(finalize_reason)
-                return
-
             # ── Execute each step in the plan ─────────────────────────────────
             # Steps are executed in groups. Consecutive invoke steps that are
             # parallel-safe (answer agent + primary re-surface) run concurrently

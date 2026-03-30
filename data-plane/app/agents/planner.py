@@ -30,7 +30,7 @@ from typing import Literal
 
 from app.agents.base import AgentStatus
 from app.agents.llm_utils import llm_structured_call
-from app.agents.agent_schemas import UtteranceClassification, PlannerLLMResponse
+from app.agents.agent_schemas import IntentItem, MultiIntentLLMResponse
 from app.agents.workflow import WorkflowGraph
 
 logger = logging.getLogger(__name__)
@@ -45,83 +45,141 @@ _ANSWER_AGENTS = {"faq", "context_docs", "fallback"}
 _EMPATHY_AGENTS = {"empathy"}
 
 
-# ── Pre-routing utterance classification ──────────────────────────────────────
+# ── Multi-intent system prompt ────────────────────────────────────────────────
 
-UtteranceClass = Literal["FIELD_DATA", "LEGAL_NARRATIVE", "BOTH", "CONTROL"]
+_MULTI_INTENT_SYSTEM = """\
+You are an intent classifier for a voice appointment booking assistant at a law firm.
 
-_CLASSIFY_SYSTEM = """\
-You are a pre-routing classifier for a voice intake assistant at a law firm.
+Given the caller's most recent utterance AND the conversation history, identify every
+distinct communicative intent in the utterance, in the ORDER they appear in speech.
 
-Your sole job: given the caller's latest utterance and the last few turns of conversation,
-classify the utterance into exactly ONE of these four categories:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INTENT TYPES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIELD_DATA    — Caller provides one or more contact or intake data values: name, email,
+                phone, address, employer, member ID, job title, date, etc.
+                A single utterance may contain multiple field values — still one intent.
+                e.g. "My name is Sarah Chen", "It's 415-555-0192", "I work at Microsoft"
+                e.g. "Sarah Chen, sarah at gmail dot com, and my number is 415-555-0192"
+                     (three fields in one utterance → still one FIELD_DATA intent)
+                HISTORY RULE: A bare value with no label ("415-555-0192", "John Smith")
+                is FIELD_DATA if the AI's last question asked for that type of data.
 
-FIELD_DATA     — The caller is providing structured contact or intake information:
-                 name, phone number, email address, physical address, employer name,
-                 job title, member ID, date, or any other specific data field.
-                 Includes spelled-out values, partial values, and corrections to fields.
-                 Examples: "My name is Sarah Chen", "It's 415-555-0192",
-                 "sarah dot chen at gmail dot com", "VW3R9KJ2", "I work at Microsoft"
+CONFIRMATION  — Caller responds yes/no to a pending read-back or confirmation question.
+                e.g. "Yes that's right", "No that's wrong", "Correct", "Yep"
+                HISTORY RULE: Only classify as CONFIRMATION when PENDING CONFIRMATION
+                is shown in context. Without a pending confirmation, "yes" is ambiguous
+                and should be treated as CONTINUATION or FIELD_DATA based on context.
 
-LEGAL_NARRATIVE — The caller is describing their legal situation, matter, or circumstances.
-                 Includes describing what happened, their current legal status, concerns,
-                 questions about their case, or any free-form account of their issue.
-                 Examples: "I was in a car accident last month",
-                 "I'm on an H1B and my employer is hinting at layoffs",
-                 "Nothing formal yet, just verbal hints, I want to know my options"
+CORRECTION    — Caller explicitly corrects a previously confirmed contact field.
+                e.g. "Wait, my email is john@gmail.com not jane@gmail.com"
+                Must include "field": the exact key from COLLECTED STATE being corrected.
+                HISTORY RULE: Look at COLLECTED STATE — correction only applies to
+                fields already confirmed and shown there.
 
-BOTH           — The utterance contains BOTH structured field data AND legal narrative.
-                 Examples: "My name is Kavita Sharma and I have an H1B visa issue",
-                 "I need help with an employment matter, I'm Marcus Rivera at microsoft"
+NARRATIVE     — Caller describes their legal situation, matter, or circumstances for
+                the first time, or adds new facts to their story.
+                e.g. "I was in a car accident last month and I'm having neck pain"
+                e.g. "My employer is hinting at layoffs and I'm worried about my H1B"
+                Rhetorical questions appended to a narrative ("can you help?",
+                "am I in the right place?", "does that make sense?") are NARRATIVE,
+                not FAQ_QUESTION.
+                HISTORY RULE: If the AI just asked "tell me more about your situation"
+                and the caller continues the story, this is NARRATIVE (or CONTINUATION
+                if they're adding to what they just said).
 
-CONTROL        — A short yes/no/confirmation/correction/stop signal with no new information.
-                 Examples: "Yes", "No", "That's correct", "Yes that's right",
-                 "Actually no", "Stop", "Cancel", "Goodbye"
+FAQ_QUESTION  — Caller asks a concrete standalone question about fees, process,
+                location, hours, what the firm handles, or firm policy.
+                e.g. "What are your consultation fees?", "Where are you located?"
+                NOT FAQ_QUESTION if the question is rhetorical or embedded in narrative.
+                HISTORY RULE: "How long does this take?" asked mid-data-collection is
+                FAQ_QUESTION even without narrative context.
 
-Rules:
-- Use the conversation history to understand context. A short utterance like
-  "Nothing formal yet" is LEGAL_NARRATIVE if the prior turns show the caller
-  was describing a legal matter.
-- When the caller provides any specific data value (ID, number, name, email) AND
-  describes their situation in the same utterance, classify as BOTH.
-- Default to FIELD_DATA when unsure — it is the safer fallback.
+DATA_STATUS   — Caller asks a question directed specifically at the data collection
+                state: what has been collected, whether a field was captured correctly,
+                or requests a read-back of collected information.
+                e.g. "What information do you have so far?"
+                e.g. "Did you get my name right?", "Can you repeat back my email?"
+                e.g. "What fields have you collected?", "Do you have my phone number?"
+                These are NOT FAQ_QUESTION — they are questions for data_collection,
+                not the firm. Route to data_collection regardless of call stage.
 
-Respond with ONLY valid JSON: {"utterance_class": "FIELD_DATA"} (or LEGAL_NARRATIVE, BOTH, CONTROL)
-No explanation, no other keys.
+CONTINUATION  — Caller continues or adds detail to their previous statement,
+                in direct response to the AI's last acknowledgment or prompt.
+                Use when the AI's last message invited more detail and the caller
+                is responding to that — not starting a new topic.
+                HISTORY RULE: If the last AI turn ended with "tell me more" or
+                "go ahead" and the caller continues, this is CONTINUATION.
+
+FAREWELL      — Caller is unmistakably signing off the call with explicit goodbye words.
+                e.g. "Goodbye!", "Thanks, talk to you then, bye!", "Take care!"
+                NOT farewell: "Okay. Thank you.", "Sounds good", "Perfect" — these
+                are ambiguous acknowledgments that could occur mid-conversation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CLASSIFICATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. HISTORY FIRST — always read the conversation history before classifying.
+   The same words mean different things depending on what the AI last asked.
+   "Four one five" after "what's your phone number?" is FIELD_DATA.
+   "Four one five" after "tell me more about your situation" is unexpected — ask
+   yourself what the most plausible intent is given the full context.
+
+2. SPEECH ORDER — list intents in the order the caller expressed them.
+   Most utterances have exactly 1 intent. Use 2 only when clearly distinct
+   communicative parts exist in sequence. Use 3 only for three distinct acts.
+
+3. FAREWELL terminates — if present, it must be the last intent in the list.
+
+4. CORRECTION requires "field" — the exact key from COLLECTED STATE.
+   If the corrected field cannot be identified with confidence, use FIELD_DATA.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLES (showing history influence)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AI: "What is your name?"  Caller: "John Smith"
+  → [FIELD_DATA]  (direct answer to a field question)
+
+AI: "Is that correct?"  Caller: "Yes"  (pending: email)
+  → [CONFIRMATION]  (pending confirmation exists)
+
+AI: "Tell me more."  Caller: "Nothing formal yet, just hints from my manager."
+  → [CONTINUATION]  (continuing narrative in response to AI prompt)
+
+AI: "What is your email?"  Caller: "john at gmail dot com. Also my phone is 415-555-0192."
+  → [FIELD_DATA]  (two fields in one utterance — still one FIELD_DATA intent)
+
+AI: "What brings you to us today?"
+Caller: "I was in a car accident last month. What are your fees?"
+  → [NARRATIVE, FAQ_QUESTION]  (narrative first, then concrete question)
+
+AI: "What is your phone number?"  Caller: "Yes, and by the way what are your hours?"
+  → [CONFIRMATION, FAQ_QUESTION]  (pending confirmation answered, then question)
+
+AI: "What's your email address?"  Caller: "Wait — did you get my name right earlier?"
+  → [DATA_STATUS]  (question about a previously collected field → data_collection)
+
+AI: "I have your phone as 415-555-0192 — is that correct?"
+Caller: "Yes. Actually, what information do you have on me so far?"
+  → [CONFIRMATION, DATA_STATUS]  (confirms phone, then asks for status read-back)
+
+Caller: "No wait, my email is john@gmail.com not jane@gmail.com"
+  (email_address in COLLECTED STATE)
+  → [CORRECTION field=email_address]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESPONSE FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Return ONLY valid JSON. No markdown. No explanation.
+
+{
+  "thinking": "<brief reasoning using history to explain the intent order>",
+  "intents": [
+    {"type": "NARRATIVE", "field": null, "reason": "caller described their situation"},
+    {"type": "FAQ_QUESTION", "field": null, "reason": "asked about fees"}
+  ]
+}
 """
-
-
-def classify_utterance(utterance: str, recent_history: list[dict] | None = None) -> UtteranceClass:
-    """
-    LLM-based pre-routing classification with conversation history context.
-
-    Uses the last 4 turns of history so ambiguous short utterances (e.g.
-    "Nothing formal yet") are classified correctly based on what came before.
-
-    Returns one of: FIELD_DATA | LEGAL_NARRATIVE | BOTH | CONTROL
-
-    Falls back to FIELD_DATA on any error — safe default since data_collection
-    handles unrecognised utterances via its CANNOT_PROCESS path.
-    """
-    # Build a compact history block (last 4 turns only)
-    history_block = ""
-    if recent_history:
-        last_turns = recent_history[-4:]
-        lines = []
-        for t in last_turns:
-            role = "Caller" if t.get("role") == "user" else "Assistant"
-            content = (t.get("content") or "")[:200]
-            lines.append(f"{role}: {content}")
-        if lines:
-            history_block = "RECENT CONVERSATION:\n" + "\n".join(lines) + "\n\n"
-
-    user_msg = f'{history_block}CALLER JUST SAID: "{utterance}"\n\nClassify this utterance.'
-
-    try:
-        result = llm_structured_call(_CLASSIFY_SYSTEM, user_msg, UtteranceClassification, max_tokens=64)
-        return result.utterance_class
-    except Exception as exc:
-        logger.warning("classify_utterance LLM call failed: %s — defaulting to FIELD_DATA", exc)
-        return "FIELD_DATA"
 
 
 # ── Plan models ────────────────────────────────────────────────────────────────
@@ -136,146 +194,16 @@ class PlanStep:
     use_empty_utterance: bool = False  # invoke with "" instead of caller_text (re-surface pending)
 
 
-# ── Planner system prompt ──────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-_PLANNER_SYSTEM = """\
-You are an execution planner for a voice appointment booking assistant.
-
-Given the caller's most recent utterance and full conversation context, you will:
-  STEP 1: Classify the utterance type
-  STEP 2: Create an ordered EXECUTION PLAN
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1: CLASSIFY THE UTTERANCE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Choose the single best type from:
-
-DIRECT_ANSWER   — Caller is directly answering what the AI just asked.
-                  e.g. AI asked "What is your name?" → caller says "John Smith"
-                  e.g. AI asked "Is that correct?" → caller says "Yes" or "No"
-
-FOLLOW_UP       — Caller adds to, clarifies, or references their previous message.
-                  e.g. Caller said "John" before, now says "Actually it's John Smith"
-
-CONTINUATION    — Caller continues a narrative or description they were giving.
-                  e.g. AI acknowledged their story, caller is adding more details
-
-CORRECTION      — Caller explicitly corrects a previously confirmed contact field.
-                  e.g. "Wait, my email is john@gmail.com not jane@gmail.com"
-                  e.g. "Actually spell my name as J-O-H-N"
-
-NEW_TOPIC       — Caller changes subject or asks an unrelated question.
-                  e.g. After providing info, caller asks "What are your fees?"
-
-NARRATIVE       — Caller is describing their legal situation for the first time.
-                  e.g. "I was in a car accident last month..."
-
-FAREWELL        — Caller is clearly signing off the call (regardless of call stage).
-                  e.g. "Goodbye!", "Thanks, have a great day!", "Talk to you then, bye!", "Take care!"
-                  NOT farewell: "That would be great, thank you" (accepting a slot offer mid-booking)
-                  NOT farewell: "Sounds good" or "Perfect" as a yes/no response to a question
-                  NOT farewell: "Yes" or "Confirmed" when scheduling is awaiting_confirm stage.
-                  Use FAREWELL when the caller is unmistakably ending the call.
-                  Even if data collection or scheduling has not yet completed, a clear sign-off
-                  (e.g. "Goodbye", "Bye", "Talk later") should be classified as FAREWELL.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AVAILABLE ACTIONS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"invoke"       — Run an agent with the caller's utterance. Each agent
-                 independently extracts what is relevant to it.
-
-"reset_fields" — Clear one or more already-collected contact fields so
-                 they can be corrected. Use ONLY when the caller explicitly
-                 corrects a previously confirmed value. Must be immediately
-                 followed by invoke("data_collection"). Use the exact field
-                 key shown in COLLECTED STATE (e.g. "full_name", "email_address").
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2: PLANNING RULES (check in order)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-0. WAITING_CONFIRM — Check AGENT STATUS. If any agent shows "WAITING_CONFIRM"
-   (it is mid-confirmation, waiting for caller to say yes or no):
-   a) utterance_type=DIRECT_ANSWER or CONTROL (yes/no/confirm/correct/stop):
-      Plan ONLY: [invoke("<waiting_agent>")]. It handles the yes/no response.
-   b) utterance_type=NEW_TOPIC (caller asks a question while mid-confirmation):
-      Plan: [invoke("<answer_agent>"), invoke("<waiting_agent>")].
-      Pick the best answer agent (faq, context_docs, or fallback).
-      The second step re-asks the pending confirmation after answering.
-   c) utterance_type=LEGAL_NARRATIVE:
-      Plan: [invoke("narrative_collection"), invoke("<waiting_agent>")].
-      Let them continue their story, then re-surface the confirmation.
-   The WAITING_CONFIRM agent MUST appear in the plan in all three cases above.
-
-1. FAREWELL — If utterance_type=FAREWELL, plan ONLY: [invoke("farewell")].
-   Exception: if scheduling is actively mid-booking (status=IN_PROGRESS and stage=
-   awaiting_choice or awaiting_confirm), treat the utterance as DIRECT_ANSWER to
-   the scheduling agent instead — the caller may be acknowledging a slot, not signing off.
-   In all other cases (data_collection in progress, scheduling not yet started,
-   scheduling COMPLETED, or scheduling not available), invoke farewell immediately.
-
-2. EMPATHY — If utterance_type=NARRATIVE and "empathy" is in AVAILABLE AGENTS
-   (meaning it has not yet been used this call), prepend an empathy step:
-   invoke("empathy") → invoke("narrative_collection") [or "data_collection" if
-   narrative_collection is not yet available].
-   Skip this rule if "empathy" is NOT listed in AVAILABLE AGENTS.
-
-3. NARRATIVE PRIORITY — If "narrative_collection" is IN_PROGRESS (caller is mid-story)
-   AND the utterance is NARRATIVE, CONTINUATION, FOLLOW_UP, or DIRECT_ANSWER to a
-   narrative prompt, plan: [invoke("narrative_collection")].
-   Also: rhetorical embedded questions appended to a narrative ("can you help?",
-   "does that make sense?", "am I in the right place?", "is that enough?") are
-   NARRATIVE type — route to narrative_collection, NOT to faq or context_docs.
-
-4. PENDING CONFIRM — If PENDING CONFIRMATION is shown and utterance_type=DIRECT_ANSWER
-   (caller is saying yes/no/confirm/correct), plan: [invoke("data_collection")].
-   The data_collection agent will handle the confirmation response.
-
-5. CORRECTION — If utterance_type=CORRECTION and a contact field was corrected,
-   plan: reset_fields([field_key]) → invoke("data_collection")
-
-6. DIRECT_ANSWER to narrative — If utterance_type=DIRECT_ANSWER and the AI last
-   asked about the caller's legal situation or story, plan: [invoke("narrative_collection")].
-
-7. CONTINUATION — If utterance_type=CONTINUATION, route to the same agent the AI
-   was last using. If that agent is unavailable, route to narrative_collection.
-
-8. MULTI-INTENT — If the utterance contains BOTH contact data (name, phone, email)
-   AND a description of a legal matter or situation, and "empathy" is NOT available:
-   invoke("data_collection") → invoke("narrative_collection")
-   If "empathy" IS available: invoke("empathy") → invoke("data_collection") → invoke("narrative_collection")
-
-9. NEW_TOPIC / QUESTION — If utterance_type=NEW_TOPIC and caller is asking about
-   fees, process, location, or firm policy: invoke("faq"), invoke("context_docs"),
-   or invoke("fallback") as appropriate.
-
-10. GOAL PURSUIT — Always advance toward the NEXT PRIMARY GOAL. If no interrupt-worthy
-    question is present, route to the NEXT PRIMARY GOAL agent.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONSTRAINTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- NEVER invoke "intake_qualification" directly — it auto-runs via edge chain.
-- NEVER plan more than 3 steps.
-- Always include at least one invoke step.
-- Only use agents listed in AVAILABLE AGENTS.
-- reset_fields must always be immediately followed by invoke("data_collection").
-- Use the UTTERANCE CLASS pre-routing signal as a strong prior:
-  LEGAL_NARRATIVE → prefer narrative_collection over data_collection.
-  FIELD_DATA → prefer data_collection.
-  BOTH → invoke data_collection then narrative_collection (or empathy first if available).
-  CONTROL → short yes/no — follow PENDING CONFIRM and DIRECT_ANSWER rules.
-
-Respond ONLY with valid JSON:
-{
-  "thinking": "<reasoning about utterance type and plan choice>",
-  "utterance_type": "<DIRECT_ANSWER|FOLLOW_UP|CONTINUATION|CORRECTION|NEW_TOPIC|NARRATIVE|FAREWELL>",
-  "steps": [
-    {"action": "invoke", "agent_id": "<id>", "fields": null, "reason": "<brief>"},
-    {"action": "reset_fields", "agent_id": null, "fields": ["field_key"], "reason": "<brief>"}
-  ]
-}
-"""
+def _join(a: str, b: str) -> str:
+    """Join two speak strings with natural sentence separation."""
+    a = a.rstrip()
+    b = b.strip()
+    if not b:
+        return a
+    sep = " " if a.endswith((".", "?", "!")) else ". "
+    return f"{a}{sep}{b}"
 
 
 # ── Planner class ──────────────────────────────────────────────────────────────
@@ -308,7 +236,6 @@ class Planner:
     def __init__(self, graph: WorkflowGraph) -> None:
         self._graph = graph
         self._resume_stack: list[str] = []
-        self.last_utterance_class: UtteranceClass = "FIELD_DATA"
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -318,20 +245,16 @@ class Planner:
         recent_history: list[dict],
     ) -> list[PlanStep]:
         """
-        Generate an execution plan for this utterance.
+        Classify the caller's utterance into an ordered list of intents (speech order),
+        then deterministically map each intent to agent invocations.
 
-        Returns an ordered list of PlanSteps. The handler executes each step
-        using its own _invoke_and_follow, keeping all infrastructure concerns
-        (tools, DB persist, TTS, edge chains) in the handler.
+        The LLM identifies what the caller meant and in what order; Python builds
+        the execution plan from that — keeping routing logic out of the LLM.
 
         Falls back to a single-step plan targeting the next primary goal if the
         LLM call fails.
         """
         graph = self._graph
-
-        # Pre-routing classification — LLM call with last 4 turns of history.
-        utt_class = classify_utterance(utterance, recent_history)
-        self.last_utterance_class = utt_class
 
         available = graph.available_nodes()
         if not available:
@@ -355,13 +278,11 @@ class Planner:
                 f"  {node.description}\n"
             )
 
-        # Collected fields for correction detection
-        collected_fields = {}
+        # Collected fields — shown so the LLM can identify CORRECTION intents
         dc_state = graph.states.get("data_collection")
-        if dc_state:
-            collected_fields = dc_state.internal_state.get("collected", {})
+        collected_fields = dc_state.internal_state.get("collected", {}) if dc_state else {}
         collected_line = (
-            "\nCOLLECTED STATE (confirmed contact fields — use exact keys in reset_fields):\n"
+            "\nCOLLECTED STATE (confirmed contact fields — use exact keys for CORRECTION.field):\n"
             + (
                 "\n".join(f"  {k}: {v!r}" for k, v in collected_fields.items())
                 or "  (none yet)"
@@ -369,7 +290,7 @@ class Planner:
             + "\n"
         )
 
-        # Pending confirmation context
+        # Pending confirmation — critical for CONFIRMATION intent classification
         pending_line = ""
         if dc_state:
             pending = dc_state.internal_state.get("pending_confirmation")
@@ -377,20 +298,19 @@ class Planner:
                 field_name = pending.get("field", "unknown")
                 value = pending.get("value", "unknown")
                 pending_line = (
-                    f"\nPENDING CONFIRMATION: data_collection is awaiting caller confirmation "
+                    f"\nPENDING CONFIRMATION: data_collection is awaiting caller's yes/no "
                     f"for field '{field_name}' = {value!r}. "
-                    f"If the caller says yes/correct/right, invoke data_collection.\n"
+                    f"A yes/correct/right response is a CONFIRMATION intent.\n"
                 )
 
-        # History: last 6 turns, full content for the 3 most recent
+        # History: last 6 turns, full content for 3 most recent
         history_lines = self._format_history(recent_history)
 
-        # Last AI message — show explicitly for follow-up/continuation detection
+        # Last AI message — critical for disambiguating partial answers and continuations
         last_ai_line = ""
         for turn in reversed(recent_history):
             if turn.get("role") == "assistant":
-                last_ai_content = turn["content"]
-                last_ai_line = f"\nLAST AI SAID:\n  {last_ai_content}\n"
+                last_ai_line = f"\nLAST AI SAID:\n  {turn['content']}\n"
                 break
 
         user_msg = (
@@ -402,52 +322,27 @@ class Planner:
             f"BOOKING STAGES:\n{booking_block}\n\n"
             f"CONVERSATION HISTORY (most recent last):\n{history_lines}\n"
             f"{last_ai_line}\n"
-            f"UTTERANCE CLASS (pre-routing signal): {utt_class}\n"
-            f"  FIELD_DATA=structured contact data, LEGAL_NARRATIVE=legal situation description,\n"
-            f"  BOTH=contains both, CONTROL=short yes/no/stop signal\n"
-            f"  Use this as a strong prior when deciding between data_collection and narrative_collection.\n\n"
             f'CALLER JUST SAID: "{utterance}"\n\n'
-            "Classify the utterance and create an execution plan. Reply JSON only."
+            "Identify intents in speech order. Reply JSON only."
         )
 
         try:
-            result = llm_structured_call(_PLANNER_SYSTEM, user_msg, PlannerLLMResponse, max_tokens=2048)
-            thinking = result.thinking
-            utterance_type = result.utterance_type
+            result = llm_structured_call(
+                _MULTI_INTENT_SYSTEM, user_msg, MultiIntentLLMResponse, max_tokens=512
+            )
 
-            steps: list[PlanStep] = []
-            for s in result.steps[:_MAX_PLAN_STEPS]:
-                if s.action == "invoke":
-                    if s.agent_id and s.agent_id in available_ids:
-                        steps.append(PlanStep(
-                            action="invoke",
-                            agent_id=s.agent_id,
-                            reason=s.reason,
-                        ))
-                    elif s.agent_id:
-                        logger.warning(
-                            "Planner returned unavailable agent %r — skipping step", s.agent_id
-                        )
-                elif s.action == "reset_fields":
-                    fields = s.fields or []
-                    if fields:
-                        steps.append(PlanStep(
-                            action="reset_fields",
-                            fields=fields,
-                            reason=s.reason,
-                        ))
+            steps = self._build_steps_from_intents(result.intents, available_ids)
 
             if not any(s.action == "invoke" for s in steps):
-                logger.warning("Planner produced no invoke steps — using fallback")
+                logger.warning("Intent mapping produced no invoke steps — using fallback")
                 steps = self._fallback_plan(available_ids)
 
-            # Post-plan validator: enforce WAITING_CONFIRM is addressed
             steps = self._validate_waiting_confirm(steps)
 
             logger.info(
-                "Planner | type=%s | thinking=%r | steps=%s | utterance=%r",
-                utterance_type,
-                thinking,
+                "Planner | intents=%s | thinking=%r | steps=%s | utterance=%r",
+                [(i.type, i.field) for i in result.intents],
+                result.thinking,
                 [(s.action, s.agent_id or s.fields) for s in steps],
                 utterance[:100],
             )
@@ -460,69 +355,44 @@ class Planner:
 
     def combine_speaks(self, speaks: list[tuple[str, str, float]]) -> str:
         """
-        Intelligently combine speaks from multiple agents into a single response.
+        Combine speaks from multiple agents in speech order into a single response.
 
-        speaks: list of (speak_text, agent_id, confidence) triples in execution order.
+        speaks: list of (speak_text, agent_id, confidence) triples in execution order
+                (same order as the caller's intents).
 
-        Combination rules (checked in order):
+        Rules:
         1. Single speak: return as-is.
-        2. Named agent-type rules (empathy, answer+data, filler+data, etc.).
-        3. Confidence-based selection: if one agent has confidence > other by 0.3+,
-           prefer the higher-confidence speak (for parallel BOTH invocations).
-        4. General: join all non-empty speaks with a space.
+        2. Empathy + anything: empathy text first, then other speak joined naturally.
+           Exception: empathy + narrative_collection filler → empathy alone
+           (the narrative agent has nothing to add that empathy hasn't covered).
+        3. All other combinations: join in execution order with natural sentence
+           joining. Agents speak in the same order the caller raised each topic.
         """
         if not speaks:
             return ""
         if len(speaks) == 1:
             return speaks[0][0]
 
-        texts = [s[0] for s in speaks]
-        ids = [s[1] for s in speaks]
+        # Filter out empty speaks before combining
+        non_empty = [(t, i, c) for t, i, c in speaks if t and t.strip()]
+        if not non_empty:
+            return ""
+        if len(non_empty) == 1:
+            return non_empty[0][0]
 
-        # Two speaks: apply smart rules
-        if len(speaks) == 2:
-            a_text, a_id, a_conf = speaks[0]
-            b_text, b_id, b_conf = speaks[1]
+        # Empathy first — always keep, but collapse empathy + narrative filler
+        if non_empty[0][1] in _EMPATHY_AGENTS and len(non_empty) == 2:
+            a_text, _, _ = non_empty[0]
+            b_text, b_id, _ = non_empty[1]
+            if b_id in _FILLER_AGENTS:
+                return a_text  # narrative filler after empathy adds nothing
+            return _join(a_text, b_text)
 
-            # Empathy acknowledgment + any agent: empathy first, then other speak
-            if a_id in _EMPATHY_AGENTS:
-                if b_id in _FILLER_AGENTS:
-                    # narrative filler after empathy is redundant — empathy alone
-                    return a_text
-                a_clean = a_text.rstrip()
-                b_clean = b_text.strip()
-                sep = " " if a_clean.endswith((".", "?", "!")) else ". "
-                return f"{a_clean}{sep}{b_clean}"
-
-            # Answer agent + data_collection: answer first, then re-ask
-            if a_id in _ANSWER_AGENTS and b_id == "data_collection":
-                a_clean = a_text.rstrip()
-                b_clean = b_text.strip()
-                sep = " " if a_clean.endswith((".", "?", "!")) else ". "
-                return f"{a_clean}{sep}{b_clean}"
-
-            # Narrative filler + data_collection: skip filler, use data question
-            if a_id in _FILLER_AGENTS and b_id == "data_collection":
-                return b_text
-
-            # data_collection + narrative filler: use data speak
-            if a_id == "data_collection" and b_id in _FILLER_AGENTS:
-                return a_text
-
-            # Confidence tiebreaker for parallel invocations (e.g. BOTH utterances):
-            # if one agent is clearly more confident, use its speak
-            if abs(a_conf - b_conf) > 0.3:
-                winner_text = a_text if a_conf > b_conf else b_text
-                winner_id = a_id if a_conf > b_conf else b_id
-                logger.debug(
-                    "combine_speaks: confidence winner=%s (%.2f vs %.2f)",
-                    winner_id, max(a_conf, b_conf), min(a_conf, b_conf),
-                )
-                return winner_text
-
-        # General: join all non-empty speaks
-        combined = " ".join(t.strip() for t in texts if t.strip())
-        return combined
+        # General: join all speaks in speech order
+        result = non_empty[0][0]
+        for speak_text, _, _ in non_empty[1:]:
+            result = _join(result, speak_text)
+        return result
 
     def reset_fields(self, fields: list[str], collected: dict) -> None:
         """
@@ -582,6 +452,83 @@ class Planner:
 
     # ── Private ────────────────────────────────────────────────────────────────
 
+    def _build_steps_from_intents(
+        self,
+        intents: list[IntentItem],
+        available_ids: set[str],
+    ) -> list[PlanStep]:
+        """
+        Deterministically map an ordered list of intents to PlanSteps.
+
+        Each intent produces one or two steps (CORRECTION produces reset_fields +
+        invoke; NARRATIVE may prepend empathy). Steps are ordered to match the
+        caller's speech order. FAREWELL terminates — no further steps after it.
+        Consecutive duplicate data_collection invocations are collapsed to one.
+        """
+        graph = self._graph
+        steps: list[PlanStep] = []
+        last_invoke_agent: str | None = None
+
+        for intent in intents:
+            t = intent.type
+
+            if t in ("FIELD_DATA", "CONFIRMATION"):
+                if "data_collection" in available_ids and last_invoke_agent != "data_collection":
+                    steps.append(PlanStep(action="invoke", agent_id="data_collection", reason=t))
+                    last_invoke_agent = "data_collection"
+
+            elif t == "CORRECTION":
+                field = intent.field
+                if field:
+                    steps.append(PlanStep(action="reset_fields", fields=[field], reason="CORRECTION"))
+                if "data_collection" in available_ids:
+                    steps.append(PlanStep(action="invoke", agent_id="data_collection", reason="CORRECTION"))
+                    last_invoke_agent = "data_collection"
+
+            elif t == "NARRATIVE":
+                # Prepend empathy if it hasn't been used this call
+                if "empathy" in available_ids:
+                    steps.append(PlanStep(action="invoke", agent_id="empathy", reason="NARRATIVE"))
+                    last_invoke_agent = "empathy"
+                if "narrative_collection" in available_ids:
+                    steps.append(PlanStep(action="invoke", agent_id="narrative_collection", reason="NARRATIVE"))
+                    last_invoke_agent = "narrative_collection"
+
+            elif t == "DATA_STATUS":
+                if "data_collection" in available_ids and last_invoke_agent != "data_collection":
+                    steps.append(PlanStep(action="invoke", agent_id="data_collection", reason="DATA_STATUS"))
+                    last_invoke_agent = "data_collection"
+
+            elif t == "FAQ_QUESTION":
+                for faq_agent in ("faq", "context_docs", "fallback"):
+                    if faq_agent in available_ids:
+                        steps.append(PlanStep(action="invoke", agent_id=faq_agent, reason="FAQ_QUESTION"))
+                        last_invoke_agent = faq_agent
+                        break
+
+            elif t == "CONTINUATION":
+                # Route to the currently active primary agent, or narrative_collection
+                active = graph.active_primary()
+                target = active.node_id if active else None
+                if not target or target not in available_ids:
+                    target = next(
+                        (a for a in ("narrative_collection", "data_collection") if a in available_ids),
+                        None,
+                    )
+                if target and target != last_invoke_agent:
+                    steps.append(PlanStep(action="invoke", agent_id=target, reason="CONTINUATION"))
+                    last_invoke_agent = target
+
+            elif t == "FAREWELL":
+                if "farewell" in available_ids:
+                    steps.append(PlanStep(action="invoke", agent_id="farewell", reason="FAREWELL"))
+                break  # FAREWELL terminates — nothing after a sign-off
+
+            if len([s for s in steps if s.action == "invoke"]) >= _MAX_PLAN_STEPS:
+                break
+
+        return steps
+
     def _format_history(self, recent_history: list[dict]) -> str:
         """
         Format conversation history for the planner context.
@@ -610,12 +557,14 @@ class Planner:
         """
         Post-plan safety net: ensure WAITING_CONFIRM agent is in every plan.
 
-        Two cases:
-        1. Waiting agent is the ONLY invoke step (direct yes/no response):
-           → keep use_empty_utterance=False so "yes"/"no" is passed through.
-        2. Waiting agent appears after other invoke steps, or is missing entirely
-           (interrupt pattern — answer first, re-surface confirmation after):
-           → set use_empty_utterance=True so the agent re-asks its pending question.
+        Three cases:
+        1. Waiting agent is FIRST invoke step: caller is directly responding to the
+           confirmation — pass through the utterance (use_empty_utterance=False).
+        2. Waiting agent appears AFTER other invoke steps: those agents handle their
+           intent first, then the waiting agent re-asks its pending question
+           (use_empty_utterance=True).
+        3. Waiting agent is missing entirely: inject it at the end as a re-surface
+           (use_empty_utterance=True).
         """
         waiting_id = self._graph.active_waiting_confirm()
         if not waiting_id:
@@ -623,10 +572,9 @@ class Planner:
 
         invoke_steps = [s for s in steps if s.action == "invoke"]
         waiting_step = next((s for s in invoke_steps if s.agent_id == waiting_id), None)
-        other_agents = [s for s in invoke_steps if s.agent_id != waiting_id]
 
         if waiting_step is None:
-            # Missing from plan — inject as final step (re-surface after interrupt)
+            # Missing — inject at end so caller's confirmation is re-surfaced after other intents
             logger.info(
                 "Planner validator: WAITING_CONFIRM (%s) missing from plan — injecting",
                 waiting_id,
@@ -637,9 +585,10 @@ class Planner:
                 reason="waiting_confirm_reinjected",
                 use_empty_utterance=True,
             ))
-        elif other_agents:
-            # Other agents in plan → waiting agent is a re-surface, not a yes/no handler
+        elif invoke_steps[0].agent_id != waiting_id:
+            # Waiting agent is not first — it's a re-surface after other intents are handled
             waiting_step.use_empty_utterance = True
+        # else: waiting agent IS first → caller is responding directly, pass utterance through
 
         return steps
 

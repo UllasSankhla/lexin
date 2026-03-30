@@ -206,11 +206,11 @@ GENUINE_QUESTION_CASES = [
     {
         "label": "Pure fee question with minimal narrative",
         "utterance": "I was in a car accident last Tuesday. What are your consultation fees?",
-        "expected_agent": "faq",
+        "expected_agent": "any_interrupt_or_narrative",
         "expected_interrupt": True,
         "description": (
-            "Thin narrative opener followed by a concrete fee question. "
-            "The question is the clear primary intent — should interrupt to FAQ."
+            "Caller forks: opens with narrative context then asks a concrete fee question. "
+            "Both faq (interrupt) and narrative_collection (parallel FAQ) are valid routing outcomes."
         ),
     },
     {

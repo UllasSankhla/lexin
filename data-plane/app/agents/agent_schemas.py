@@ -71,20 +71,22 @@ class RouterDecision(BaseModel):
 
 # ── Planner ───────────────────────────────────────────────────────────────────
 
-class UtteranceClassification(BaseModel):
-    """Result of the lightweight pre-routing utterance classifier."""
-    utterance_class: Literal["FIELD_DATA", "LEGAL_NARRATIVE", "BOTH", "CONTROL"]
+class IntentItem(BaseModel):
+    """A single detected intent within the caller's utterance."""
+    type: Literal[
+        "FIELD_DATA",
+        "CONFIRMATION",
+        "CORRECTION",
+        "NARRATIVE",
+        "FAQ_QUESTION",
+        "DATA_STATUS",
+        "CONTINUATION",
+        "FAREWELL",
+    ]
+    field: Optional[str] = None  # CORRECTION only: exact key from COLLECTED STATE
+    reason: str = ""             # brief LLM reasoning for this intent
 
 
-class PlanStepLLM(BaseModel):
-    """A single step in the LLM-generated execution plan."""
-    action: Literal["invoke", "reset_fields"]
-    agent_id: Optional[str] = None
-    fields: Optional[list[str]] = None
-    reason: str = ""
-
-
-class PlannerLLMResponse(BaseModel):
+class MultiIntentLLMResponse(BaseModel):
     thinking: str
-    utterance_type: str
-    steps: list[PlanStepLLM]
+    intents: list[IntentItem]    # ordered by speech position, max 3

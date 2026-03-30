@@ -237,6 +237,161 @@ def test_sim_rejection_and_reentry():
     assert AgentStatus.COMPLETED in statuses
 
 
+def test_sim_email_correction_with_spelling_clarification():
+    """
+    Replicates the bench-2 bug:
+
+    1. Caller provides email with a typo ('riviera' instead of 'rivera').
+    2. AI reads it back and enters WAITING_CONFIRM.
+    3. Caller corrects the typo AND spells out the corrected part letter-by-letter
+       ('marcus dot rivera, R-I-V-E-R-A, at outlook dot com').
+    4. Agent must accept the correction and confirm the corrected email —
+       NOT reject it as invalid or get stuck looping on email validation.
+    5. After email is confirmed, agent must advance to collecting phone —
+       NOT keep treating subsequent phone digits as email input.
+
+    Root causes identified in bench-2 evaluation (score 2.4/5, turns 3-6):
+    - Bug 1 (extraction): LLM included spelled-out letters in the extracted
+      email value (e.g. 'marcus.riveraR-I-V-E-R-A@outlook.com') → regex rejects it.
+    - Bug 2 (state): On validation failure, internal_state['pending_confirmation']
+      was not cleared, so the old wrong email persisted as pending across all
+      subsequent turns — causing phone input to be treated as email correction.
+    """
+    agent = DataCollectionAgent()
+    state: dict = {}
+    config = {
+        "assistant": {"persona_name": "Aria at Nexus Law"},
+        "parameters": [
+            {
+                "name": "full_name",
+                "display_label": "Full Name",
+                "data_type": "name",
+                "required": True,
+                "extraction_hints": [],
+            },
+            {
+                "name": "email_address",
+                "display_label": "Email Address",
+                "data_type": "email",
+                "required": True,
+                "extraction_hints": [],
+            },
+            {
+                "name": "phone_number",
+                "display_label": "Phone Number",
+                "data_type": "phone",
+                "required": True,
+                "extraction_hints": [],
+            },
+        ],
+    }
+
+    print(f"\n{'=' * 60}")
+    print("SIM: Email correction with spelling clarification (bench-2 bug)")
+    print(f"{'=' * 60}")
+
+    # Opening
+    resp = agent.process("", state, config, [])
+    state = resp.internal_state
+    print(f"[open] AI: {resp.speak}")
+
+    # T1: Caller provides name
+    resp = agent.process("My name is Marcus Rivera", state, config, [])
+    state = resp.internal_state
+    print(f"[T1] Caller: 'My name is Marcus Rivera'")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+
+    # Confirm name
+    resp = agent.process("Yes that's me", state, config, [])
+    state = resp.internal_state
+    print(f"[T2] Caller: 'Yes that's me'")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+
+    # T3: Provide email with typo ('riviera' not 'rivera')
+    resp = agent.process("My email is marcus dot riviera at outlook dot com", state, config, [])
+    state = resp.internal_state
+    print(f"[T3] Caller: 'My email is marcus dot riviera at outlook dot com'")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+    print(f"     pending: {state.get('pending_confirmation')}")
+    # Agent should be WAITING_CONFIRM for the email
+    assert resp.status == AgentStatus.WAITING_CONFIRM, (
+        f"Expected WAITING_CONFIRM after email, got {resp.status.value}"
+    )
+
+    # T4: Caller corrects typo AND spells out the surname — the exact bench-2 pattern
+    resp = agent.process(
+        "Oh wait, I think I misspelled it. It's Rivera not Riviera — "
+        "so the email should be marcus dot rivera, R-I-V-E-R-A, at outlook dot com",
+        state, config, [],
+    )
+    state = resp.internal_state
+    print(f"[T4] Caller: correction with spelling clarification")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+    print(f"     pending: {state.get('pending_confirmation')}")
+
+    # BUG guard: agent must NOT say 'That doesn't look like a valid Email Address'
+    assert "doesn't look like a valid" not in resp.speak.lower(), (
+        f"[BUG] Agent rejected a valid email correction: {resp.speak!r}"
+    )
+    assert "could you try again" not in resp.speak.lower(), (
+        f"[BUG] Agent stuck in validation loop after correction: {resp.speak!r}"
+    )
+
+    # Agent must confirm the corrected email (WAITING_CONFIRM) or have accepted it (IN_PROGRESS)
+    assert resp.status in (AgentStatus.WAITING_CONFIRM, AgentStatus.IN_PROGRESS), (
+        f"Expected WAITING_CONFIRM or IN_PROGRESS after correction, got {resp.status.value}"
+    )
+    # If pending, it must be for the CORRECTED email, not the original typo
+    pending = state.get("pending_confirmation")
+    if pending and pending.get("field") == "email_address":
+        assert "riviera" not in (pending.get("value") or "").lower(), (
+            f"[BUG] Pending still has the misspelled email: {pending['value']!r}"
+        )
+        # Value must be a valid email (contain @)
+        assert "@" in (pending.get("value") or ""), (
+            f"[BUG] Corrected email pending value is not a valid email: {pending.get('value')!r}"
+        )
+        print(f"  ✓ Corrected email pending: {pending['value']!r}")
+
+    # T5: Confirm the corrected email
+    resp = agent.process("Yes, that's the correct one", state, config, [])
+    state = resp.internal_state
+    print(f"[T5] Caller: 'Yes, that's the correct one'")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+    print(f"     pending: {state.get('pending_confirmation')}")
+
+    # T6: Now provide phone number — agent must NOT treat this as email input
+    resp = agent.process("Seven zero two five five five eight eight eight eight", state, config, [])
+    state = resp.internal_state
+    print(f"[T6] Caller: phone number utterance")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+    print(f"     pending: {state.get('pending_confirmation')}")
+
+    # BUG guard: agent must NOT say 'That doesn't look like a valid Email Address'
+    # when the caller is giving a phone number
+    assert "doesn't look like a valid email" not in resp.speak.lower(), (
+        f"[BUG] Agent treating phone input as email after correction: {resp.speak!r}"
+    )
+
+    # Confirm phone and finish
+    resp = agent.process("Yes", state, config, [])
+    state = resp.internal_state
+    print(f"[T7] Caller: 'Yes' (confirm phone)")
+    print(f"     AI: {resp.speak}  status={resp.status.value}")
+
+    collected = state.get("collected", {})
+    print(f"\nFinal collected: {collected}")
+
+    # The corrected email must be stored (contains 'rivera' not 'riviera')
+    email = collected.get("email_address", "")
+    assert email, f"email_address not collected: {collected}"
+    assert "riviera" not in email.lower(), (
+        f"[BUG] Stored the original misspelled email: {email!r}"
+    )
+    assert "@" in email, f"Stored email is not valid: {email!r}"
+    print(f"  ✓ Correct email stored: {email!r}")
+
+
 def test_sim_spelled_out_email():
     """Caller spells out email letter by letter."""
     collected, statuses = run_conversation(

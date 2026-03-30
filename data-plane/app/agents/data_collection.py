@@ -41,6 +41,11 @@ _DEFAULT_HINTS: dict[str, list[str]] = {
         "'dot', 'period' → .  |  'hyphen', 'dash' → -  |  'underscore' → _",
         "If the caller says it quickly and it sounds ambiguous, ask them to spell the local part character by character.",
         "Common spoken domains: 'gmail dot com', 'yahoo dot com', 'hotmail dot com'",
+        "SPELLING CLARIFICATION: When the caller spells out part of the email for clarity AFTER providing it",
+        "  (e.g. 'marcus dot rivera, R-I-V-E-R-A, at outlook dot com'), extract ONLY the email address",
+        "  (marcus.rivera@outlook.com). The letter-by-letter spelling is a spoken confirmation aid —",
+        "  do NOT include the individual letters in the extracted value.",
+        "  Rule: if you see a valid email pattern followed by spaced uppercase letters, extract the email part only.",
     ],
     "phone": [
         "Accept digit groups with pauses: '415... 555... 0192' → 4155550192",
@@ -393,15 +398,28 @@ AFTER the confirmation is received.
          a MetLife ID?" ← two questions; the caller's yes/no becomes ambiguous
 
 After a confirmation is resolved (yes/no/correction), if there are still
-uncollected fields, your speak MUST seamlessly continue to the next field
-in the same sentence. Never end a turn with a bare acknowledgment when
-work remains.
+uncollected REQUIRED fields, your speak MUST seamlessly continue to the next
+required field in the same sentence. Never end a turn with a bare acknowledgment
+when required fields remain.
 
   GOOD: "Great, and what's the best number to reach you?"
   BAD:  "Thank you." — leaves the caller with nothing to do
 
 The speak for a resolved confirmation is always:
-  <brief acknowledgment> + <question for next uncollected field>
+  <brief acknowledgment> + <question for next uncollected REQUIRED field>
+
+OPTIONAL FIELDS — CRITICAL RULES:
+- When asking for an optional field, always state that it is optional and give
+  the caller a clear choice:
+    GOOD: "We also collect a physical address — that's completely optional.
+           Would you like to provide it, or shall we move on?"
+    BAD:  "And what is your physical address?" — gives no indication it can be skipped
+- If the caller declines an optional field (e.g. "I'll skip that", "not right now",
+  "no thanks"), do NOT ask for the next optional field.
+- Once all required fields are confirmed AND pending_confirmation is null,
+  set status="completed" immediately — even if optional fields remain uncollected.
+  In that case speak a brief warm transition: "Perfect, I have what I need for now."
+  Do NOT continue asking for optional fields after required collection is complete.
 
 CALLER UTTERANCE TAKES PRIORITY — always read the full utterance and extract
 any concrete field values present BEFORE deciding whether it is a yes/no response.
@@ -432,6 +450,7 @@ CANNOT-PROCESS CONDITIONS
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 INFORMATION REQUEST RULE — handle BEFORE considering cannot_process:
 If the caller asks any of the following, do NOT set cannot_process=true:
+
   a) "What information do you need?", "what do you need from me?", "what are you
      collecting?", "what details do you require?" — questions about the fields
      being gathered right now.
@@ -454,7 +473,21 @@ If the caller asks any of the following, do NOT set cannot_process=true:
                 within our practice areas before scheduling a slot. Let's continue:
                 what's the best number to reach you?"
 
-  Set status="in_progress" for both cases.
+  c) "What do you have so far?", "did you get my name right?", "can you repeat
+     back my email?", "what information do you have on me?", "do you have my
+     phone number?" — questions about the current collection state.
+     → Read back the fields already confirmed (from Already collected above) in
+       plain conversational language, then continue with the next uncollected field.
+     If a specific field is asked about (e.g. "did you get my name?"), read back
+     just that field's value and confirm it's what they said.
+     Example (name and email confirmed, phone pending):
+       speak = "I have your name as Sarah Chen and your email as sarah dot chen
+                at gmail dot com. I still need your phone number — what's the best
+                number to reach you, including the area code?"
+     Example (asked specifically about name):
+       speak = "I have your name as Sarah Chen — is that still correct?"
+
+  Set status="in_progress" for all three cases.
 
 Set cannot_process=true and status="unhandled" when:
 - The utterance is a question unrelated to providing field values AND unrelated
@@ -745,16 +778,17 @@ class DataCollectionAgent(AgentBase):
                     if not is_valid:
                         logger.info(
                             "DataCollection: correction validation failed for %s: %s — "
-                            "preserving original pending_confirmation",
+                            "clearing pending to prevent stale value from being confirmed",
                             field_name, msg_or_val,
                         )
-                        # Do NOT clear pending_confirmation — the original value is still
-                        # valid and must not be lost because a bad correction was attempted.
+                        # Clear pending_confirmation so the caller can't accidentally
+                        # confirm the old wrong value by saying "yes" in the next turn.
+                        internal_state["pending_confirmation"] = None
                         return SubagentResponse(
-                            status=AgentStatus.WAITING_CONFIRM,
-                            speak=f"{msg_or_val} Could you try again?",
+                            status=AgentStatus.IN_PROGRESS,
+                            speak=f"{msg_or_val} Could you provide it again?",
                             internal_state=internal_state,
-                            pending_confirmation=pending,
+                            pending_confirmation=None,
                             confidence=0.7,
                         )
                     logger.info(

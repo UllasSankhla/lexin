@@ -156,10 +156,13 @@ class TestFarewellRouting:
         agent_id = _first_invoke_agent(planner.plan("Thanks so much, have a good day!", []))
         assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
 
-    def test_sim_okay_thank_you_routes_to_farewell(self):
+    def test_sim_okay_thank_you_does_not_route_to_farewell(self):
+        """'Okay. Thank you.' is ambiguous — it's a contextual acknowledgment, not a clear sign-off."""
         planner, _ = self._planner()
         agent_id = _first_invoke_agent(planner.plan("Okay. Thank you.", []))
-        assert agent_id == "farewell", f"Expected farewell, got {agent_id!r}"
+        assert agent_id != "farewell", (
+            f"'Okay. Thank you.' is ambiguous and should not be classified as farewell; got {agent_id!r}"
+        )
 
     def test_sim_goodbye_routes_to_farewell(self):
         planner, _ = self._planner()
