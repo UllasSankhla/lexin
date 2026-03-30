@@ -16,6 +16,11 @@ logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+# basicConfig is a no-op when uvicorn has already installed root handlers.
+# Explicitly set the level on the app namespace so all app.* loggers are
+# guaranteed to emit at the configured level regardless of who set up first.
+_app_log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+logging.getLogger("app").setLevel(_app_log_level)
 logger = logging.getLogger(__name__)
 
 
