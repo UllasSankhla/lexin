@@ -78,10 +78,14 @@ NEXUS_CONFIG = {
 def _build_graph_mid_narrative() -> WorkflowGraph:
     """
     Return a WorkflowGraph in the state the system is in when a caller begins
-    describing their matter: data_collection COMPLETED, narrative_collection IN_PROGRESS.
+    describing their matter: data_collection COMPLETED, empathy COMPLETED,
+    narrative_collection IN_PROGRESS.
+    Empathy is marked COMPLETED because in a real call it fires on the first
+    narrative utterance — before narrative_collection reaches IN_PROGRESS.
     """
     graph = WorkflowGraph(APPOINTMENT_BOOKING)
     graph.states["data_collection"].status = AgentStatus.COMPLETED
+    graph.states["empathy"].status = AgentStatus.COMPLETED
     graph.states["narrative_collection"].status = AgentStatus.IN_PROGRESS
     graph.states["narrative_collection"].internal_state = {
         "stage": "collecting",
@@ -116,7 +120,7 @@ def _router_decision(utterance: str, history: list[dict] | None = None) -> tuple
 def _run_agent(agent_id: str, utterance: str) -> tuple[AgentStatus, str]:
     """Invoke the named agent with the given utterance and return (status, speak)."""
     graph = _build_graph_mid_narrative()
-    registry = build_registry(call_id="sim-001", transcript_turns=[])
+    registry = build_registry(call_id="sim-001", transcript=[])
     agent = registry[agent_id]
     state = graph.states[agent_id]
     response = agent.process(
