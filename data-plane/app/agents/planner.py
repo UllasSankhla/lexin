@@ -170,13 +170,14 @@ NEW_TOPIC       — Caller changes subject or asks an unrelated question.
 NARRATIVE       — Caller is describing their legal situation for the first time.
                   e.g. "I was in a car accident last month..."
 
-FAREWELL        — Caller is clearly ending the call after all goals are complete.
-                  e.g. "Goodbye!", "Thanks, have a great day!", "Talk to you then, bye!"
-                  NOT farewell: "That would be great, thank you" (accepting a slot offer mid-call)
-                  NOT farewell: "Sounds good" or "Perfect" mid-conversation
-                  NOT farewell: any gratitude expressed while scheduling is still in progress.
-                  Use FAREWELL only when no primary goals remain (scheduling complete or not needed)
-                  AND the caller is clearly signing off.
+FAREWELL        — Caller is clearly signing off the call (regardless of call stage).
+                  e.g. "Goodbye!", "Thanks, have a great day!", "Talk to you then, bye!", "Take care!"
+                  NOT farewell: "That would be great, thank you" (accepting a slot offer mid-booking)
+                  NOT farewell: "Sounds good" or "Perfect" as a yes/no response to a question
+                  NOT farewell: "Yes" or "Confirmed" when scheduling is awaiting_confirm stage.
+                  Use FAREWELL when the caller is unmistakably ending the call.
+                  Even if data collection or scheduling has not yet completed, a clear sign-off
+                  (e.g. "Goodbye", "Bye", "Talk later") should be classified as FAREWELL.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AVAILABLE ACTIONS
@@ -206,11 +207,12 @@ STEP 2: PLANNING RULES (check in order)
       Let them continue their story, then re-surface the confirmation.
    The WAITING_CONFIRM agent MUST appear in the plan in all three cases above.
 
-1. FAREWELL — If utterance_type=FAREWELL AND no primary goals are still in progress
-   (i.e. scheduling has COMPLETED or "scheduling" is not in AVAILABLE AGENTS), plan
-   ONLY: [invoke("farewell")].
-   If scheduling is still in progress (stage not done), treat the utterance as a
-   DIRECT_ANSWER to the scheduling agent instead — do NOT invoke farewell mid-booking.
+1. FAREWELL — If utterance_type=FAREWELL, plan ONLY: [invoke("farewell")].
+   Exception: if scheduling is actively mid-booking (status=IN_PROGRESS and stage=
+   awaiting_choice or awaiting_confirm), treat the utterance as DIRECT_ANSWER to
+   the scheduling agent instead — the caller may be acknowledging a slot, not signing off.
+   In all other cases (data_collection in progress, scheduling not yet started,
+   scheduling COMPLETED, or scheduling not available), invoke farewell immediately.
 
 2. EMPATHY — If utterance_type=NARRATIVE and "empathy" is in AVAILABLE AGENTS
    (meaning it has not yet been used this call), prepend an empathy step:
@@ -218,30 +220,37 @@ STEP 2: PLANNING RULES (check in order)
    narrative_collection is not yet available].
    Skip this rule if "empathy" is NOT listed in AVAILABLE AGENTS.
 
-3. PENDING CONFIRM — If PENDING CONFIRMATION is shown and utterance_type=DIRECT_ANSWER
+3. NARRATIVE PRIORITY — If "narrative_collection" is IN_PROGRESS (caller is mid-story)
+   AND the utterance is NARRATIVE, CONTINUATION, FOLLOW_UP, or DIRECT_ANSWER to a
+   narrative prompt, plan: [invoke("narrative_collection")].
+   Also: rhetorical embedded questions appended to a narrative ("can you help?",
+   "does that make sense?", "am I in the right place?", "is that enough?") are
+   NARRATIVE type — route to narrative_collection, NOT to faq or context_docs.
+
+4. PENDING CONFIRM — If PENDING CONFIRMATION is shown and utterance_type=DIRECT_ANSWER
    (caller is saying yes/no/confirm/correct), plan: [invoke("data_collection")].
    The data_collection agent will handle the confirmation response.
 
-4. CORRECTION — If utterance_type=CORRECTION and a contact field was corrected,
+5. CORRECTION — If utterance_type=CORRECTION and a contact field was corrected,
    plan: reset_fields([field_key]) → invoke("data_collection")
 
-5. DIRECT_ANSWER to narrative — If utterance_type=DIRECT_ANSWER and the AI last
+6. DIRECT_ANSWER to narrative — If utterance_type=DIRECT_ANSWER and the AI last
    asked about the caller's legal situation or story, plan: [invoke("narrative_collection")].
 
-6. CONTINUATION — If utterance_type=CONTINUATION, route to the same agent the AI
+7. CONTINUATION — If utterance_type=CONTINUATION, route to the same agent the AI
    was last using. If that agent is unavailable, route to narrative_collection.
 
-7. MULTI-INTENT — If the utterance contains BOTH contact data (name, phone, email)
+8. MULTI-INTENT — If the utterance contains BOTH contact data (name, phone, email)
    AND a description of a legal matter or situation, and "empathy" is NOT available:
    invoke("data_collection") → invoke("narrative_collection")
    If "empathy" IS available: invoke("empathy") → invoke("data_collection") → invoke("narrative_collection")
 
-8. NEW_TOPIC / QUESTION — If utterance_type=NEW_TOPIC and caller is asking about
+9. NEW_TOPIC / QUESTION — If utterance_type=NEW_TOPIC and caller is asking about
    fees, process, location, or firm policy: invoke("faq"), invoke("context_docs"),
    or invoke("fallback") as appropriate.
 
-9. GOAL PURSUIT — Always advance toward the NEXT PRIMARY GOAL. If no interrupt-worthy
-   question is present, route to the NEXT PRIMARY GOAL agent.
+10. GOAL PURSUIT — Always advance toward the NEXT PRIMARY GOAL. If no interrupt-worthy
+    question is present, route to the NEXT PRIMARY GOAL agent.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONSTRAINTS
