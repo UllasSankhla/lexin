@@ -1080,7 +1080,7 @@ class DataCollectionAgent(AgentBase):
                 _CONFIRM_CLASSIFIER_SYSTEM,
                 user_msg,
                 ConfirmationSignal,
-                max_tokens=64,
+                max_tokens=256,
             )
         except Exception as exc:
             logger.warning("Confirmation classifier failed (%s) — defaulting to mega-prompt", exc)
