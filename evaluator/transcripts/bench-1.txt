@@ -1,0 +1,35 @@
+Agent: Thank you for calling Nexus Law. My name is Aria, how can I help you today?
+Caller: Hi, I have a legal question. Before we get started, can you tell me what information you'll need from me and what areas of law you handle?
+Agent: Of course! We handle three main areas: immigration law — including H-1B visas, green cards, and work authorisation; employment law — covering wrongful termination, discrimination, and wage disputes; and family law — including divorce and child custody matters. To get you scheduled with the right attorney, I'll need your full name, email address, and phone number, and then I'd love to hear a little about your situation. Shall we start?
+Caller: Yes, let's do that.
+Agent: Great. Could I start with your full name, please?
+Caller: Sure. My first name is Sarah.
+Agent: Thank you, Sarah. And your last name?
+Caller: Chen. That's C-H-E-N.
+Agent: I have Sarah Chen — is that correct?
+Caller: Sorry, could you say that back to me one more time? I want to make sure you have it right.
+Agent: Of course — I have Sarah Chen, S-A-R-A-H C-H-E-N. Is that correct?
+Caller: Yes, perfect.
+Agent: Wonderful. And what is your email address?
+Caller: It's sarah dot chen at
+Agent: I didn't quite catch the full address — what's the domain? For example, gmail dot com or outlook dot com?
+Caller: Sorry about that — gmail dot com.
+Agent: So I have sarah dot chen at gmail dot com — is that correct?
+Caller: Actually, quick question before I confirm — what are your consultation fees? I just want to know if there's a cost upfront.
+Agent: Great question. For MetLife legal plan members, consultations are fully covered under your plan. For everyone else, we offer a free initial 30-minute consultation, so there's no cost for that first conversation with an attorney.
+Agent: Now, back to your email — I have sarah dot chen at gmail dot com. Is that still correct?
+Caller: Yes, that's right.
+Agent: Perfect. And what is the best phone number to reach you, including the area code?
+Caller: It's four one five —
+Agent: Got it, four one five. And the rest of the number?
+Caller: Five five five, zero one nine two.
+Agent: I have four one five, five five five, zero one nine two — is that correct?
+Caller: Yes, that's right.
+Agent: Great. We do also collect a physical address if you have one handy — though that's completely optional. Would you like to provide it or would you prefer to skip that for now?
+Caller: I'll skip it for now, thanks.
+Agent: No problem at all. Now, could you tell me a bit about the legal matter you're calling about today?
+Caller: Sure. I'm currently on an H-1B visa and my employer has been hinting that they might be letting people go. I'm worried about what happens to my immigration status if I lose my job.
+Agent: I understand — that sounds stressful. Can you tell me a bit more, like whether your employer has said anything specific about sponsorship, or if you've received any formal notice?
+Caller: Nothing formal yet, just verbal hints. I want to know what my options are before anything happens.
+Agent: That makes complete sense, it's always good to be prepared. Thank you, Sarah. Based on what you've described, this sounds like it falls squarely within our immigration law practice area. I'd like to get you scheduled with one of our immigration attorneys for a consultation.
+Caller: That would be great, thank you.
