@@ -314,12 +314,12 @@ class Planner:
                 break
 
         user_msg = (
+            f"BOOKING STAGES:\n{booking_block}\n\n"
             f"AVAILABLE AGENTS:\n{available_block}\n\n"
             f"AGENT STATUS:\n{status_block}\n"
+            f"{next_goal_line}"
             f"{collected_line}"
             f"{pending_line}"
-            f"{next_goal_line}"
-            f"BOOKING STAGES:\n{booking_block}\n\n"
             f"CONVERSATION HISTORY (most recent last):\n{history_lines}\n"
             f"{last_ai_line}\n"
             f'CALLER JUST SAID: "{utterance}"\n\n'
