@@ -471,6 +471,7 @@ async def handle_call(
         await safe_send_text("server.thinking", {})
         turn_counter[0] += 1
         current_turn = turn_counter[0]
+        logger.info("CALLER | turn=%d | text=%r", current_turn, caller_text)
 
         call_history = [
             {"role": t["role"], "content": t["content"]}
@@ -568,6 +569,14 @@ async def handle_call(
             transcript_turns.append({"role": "assistant", "content": speak_text})
 
             audio_id = f"resp-{seq[0] + 1}"
+            logger.info(
+                "REPLY | turn=%d | agents=%s | words=%d | audio_id=%s | text=%r",
+                current_turn,
+                [s.agent_id for s in invoke_steps] if invoke_steps else [],
+                len(speak_text.split()),
+                audio_id,
+                speak_text,
+            )
             await safe_send_text("server.response_text", {"text": speak_text, "audio_id": audio_id})
             await transport.send_response(speak_text, audio_id)
 
