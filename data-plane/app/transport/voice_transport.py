@@ -138,6 +138,10 @@ class VoiceTransport(BaseTransport):
         if msg_type == "client.audio_end":
             if self._stt:
                 await self._stt.finish_utterance()
+        elif msg_type == "client.barge_in":
+            if self._tts_playing and not self._tts_cancel.is_set():
+                logger.info("Barge-in signal from client VAD — cancelling TTS")
+                self._tts_cancel.set()
         elif msg_type == "client.hangup":
             return True
         elif msg_type == "client.ready":

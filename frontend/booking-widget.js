@@ -59,6 +59,12 @@
   let jitterBuffer = [];      // PCM chunks buffered before jitter threshold is met
   let jitterReady = false;    // true once initial jitter buffer has been flushed
 
+  // Barge-in VAD
+  let bargeInAnalyser = null;
+  let bargeInData = null;
+  let bargeInFrame = null;
+  const BARGE_IN_RMS_THRESHOLD = 0.02;  // ~human speech level; tune if needed
+
   const JITTER_BUFFER_MIN_CHUNKS = 2;  // accumulate this many chunks before starting playback
   let callId = null;
   let shadowRoot = null;
@@ -621,9 +627,11 @@
         setState(STATES.SPEAKING);
         jitterBuffer = [];
         jitterReady = false;
+        startBargeInMonitor();
         break;
 
       case 'server.tts_stream_end':
+        stopBargeInMonitor();
         // Flush chunks still in the jitter buffer (short responses may never hit threshold)
         if (jitterBuffer.length > 0) {
           jitterReady = true;
@@ -633,6 +641,7 @@
         break;
 
       case 'server.tts_interrupted':
+        stopBargeInMonitor();
         stopAudioPlayback();
         setState(STATES.ACTIVE);
         break;
@@ -697,6 +706,12 @@
 
     const source = audioCtx.createMediaStreamSource(mediaStream);
 
+    // Barge-in VAD analyser — separate from the waveform analyser
+    bargeInAnalyser = audioCtx.createAnalyser();
+    bargeInAnalyser.fftSize = 256;
+    bargeInData = new Float32Array(bargeInAnalyser.fftSize);
+    source.connect(bargeInAnalyser);
+
     // Try AudioWorklet first, fallback to ScriptProcessor
     try {
       await audioCtx.audioWorklet.addModule(PCM_WORKLET_BLOB_URL);
@@ -731,12 +746,45 @@
   }
 
   function sendAudioChunk(pcmData) {
-    // Send during ACTIVE, SPEAKING (barge-in), and THINKING (early interruption).
-    // Echo cancellation on the mic handles TTS bleed-through during SPEAKING.
-    const captureStates = [STATES.ACTIVE, STATES.SPEAKING, STATES.THINKING];
+    // During SPEAKING, audio is NOT forwarded — barge-in is handled by VAD below.
+    // During THINKING, keep sending so Deepgram captures any early caller speech.
+    const captureStates = [STATES.ACTIVE, STATES.THINKING];
     if (ws && ws.readyState === WebSocket.OPEN && captureStates.includes(state)) {
       ws.send(pcmData instanceof ArrayBuffer ? pcmData : pcmData.buffer);
     }
+  }
+
+  function _bargeInRMS() {
+    if (!bargeInAnalyser || !bargeInData) return 0;
+    bargeInAnalyser.getFloatTimeDomainData(bargeInData);
+    let sum = 0;
+    for (let i = 0; i < bargeInData.length; i++) sum += bargeInData[i] * bargeInData[i];
+    return Math.sqrt(sum / bargeInData.length);
+  }
+
+  function startBargeInMonitor() {
+    stopBargeInMonitor();
+    function poll() {
+      if (state !== STATES.SPEAKING) return;  // stop polling once TTS ends
+      const rms = _bargeInRMS();
+      if (rms >= BARGE_IN_RMS_THRESHOLD) {
+        log('Barge-in triggered | rms=', rms.toFixed(4));
+        // Tell server to cancel TTS
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'client.barge_in', seq: ++wsSeq, ts: Date.now() / 1000, payload: {} }));
+        }
+        // Stop local TTS playback immediately
+        stopAudioPlayback();
+        setState(STATES.ACTIVE);
+        return;  // don't reschedule
+      }
+      bargeInFrame = requestAnimationFrame(poll);
+    }
+    bargeInFrame = requestAnimationFrame(poll);
+  }
+
+  function stopBargeInMonitor() {
+    if (bargeInFrame !== null) { cancelAnimationFrame(bargeInFrame); bargeInFrame = null; }
   }
 
   function floatTo16BitPCM(float32Array) {
@@ -749,6 +797,9 @@
   }
 
   function stopAudioCapture() {
+    stopBargeInMonitor();
+    bargeInAnalyser = null;
+    bargeInData = null;
     if (mediaStream) {
       mediaStream.getTracks().forEach(t => t.stop());
       mediaStream = null;
