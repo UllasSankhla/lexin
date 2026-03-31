@@ -65,7 +65,7 @@ class TTSClient:
         (chunk_bytes, None) for every subsequent chunk.
         Audio is linear16 PCM at 24 kHz mono.
         """
-        logger.info(
+        logger.debug(
             "TTS stream request | model=%s encoding=linear16 sample_rate=24000 "
             "text_len=%d preview=%r",
             self._voice, len(text), text[:80],
@@ -90,7 +90,7 @@ class TTSClient:
             elapsed_ms = (time.monotonic() - t0) * 1000
 
             if chunk_num == 1:
-                logger.info(
+                logger.debug(
                     "TTS first chunk | chunk=1 raw_bytes=%d pcm_bytes=%d elapsed=%.0fms",
                     len(raw_chunk), len(chunk), elapsed_ms,
                 )
@@ -104,7 +104,7 @@ class TTSClient:
                 yield chunk, None
 
         total_ms = (time.monotonic() - t0) * 1000
-        logger.info(
+        logger.debug(
             "TTS stream complete | chunks=%d total_bytes=%d total_ms=%.0f "
             "avg_chunk_bytes=%d",
             chunk_num, total_bytes, total_ms,

@@ -96,7 +96,7 @@ class VoiceTransport(BaseTransport):
             pending = bytearray()
             async for chunk, first_chunk_latency in self._tts.stream(text):
                 if self._tts_cancel.is_set():
-                    logger.info(
+                    logger.debug(
                         "TTS stream interrupted (barge-in) after %d chunks — audio_id=%s",
                         chunks_sent, audio_id,
                     )
@@ -140,7 +140,7 @@ class VoiceTransport(BaseTransport):
                 await self._stt.finish_utterance()
         elif msg_type == "client.barge_in":
             if self._tts_playing and not self._tts_cancel.is_set():
-                logger.info("Barge-in signal from client VAD — cancelling TTS")
+                logger.debug("Barge-in signal from client VAD — cancelling TTS")
                 self._tts_cancel.set()
         elif msg_type == "client.hangup":
             return True

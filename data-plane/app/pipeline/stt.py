@@ -78,14 +78,14 @@ class STTSession:
     # ── Event handlers ────────────────────────────────────────────────────────
 
     def _on_open(self, _) -> None:
-        logger.info("STT WebSocket connection opened")
+        logger.debug("STT WebSocket connection opened")
 
     def _on_close(self, _) -> None:
-        logger.info("STT WebSocket connection closed")
+        logger.debug("STT WebSocket connection closed")
         # Flush any pending eager EOT text as a final result.
         if self._pending_text:
             elapsed_ms = (time.monotonic() - self._session_start) * 1000
-            logger.info(
+            logger.debug(
                 "STT session closed with pending text — scheduling flush | text=%r", self._pending_text
             )
             asyncio.create_task(
@@ -101,7 +101,7 @@ class STTSession:
         elapsed_ms = (time.monotonic() - self._session_start) * 1000
 
         if isinstance(message, ListenV2Connected):
-            logger.info("STT connected | request_id=%s", message.request_id)
+            logger.debug("STT connected | request_id=%s", message.request_id)
             return
 
         if isinstance(message, ListenV2FatalError):
@@ -123,7 +123,7 @@ class STTSession:
                 text, confidence, elapsed_ms,
             )
         else:
-            logger.info(
+            logger.debug(
                 "STT TurnInfo | event=%s | text=%r | conf=%.2f | eot_conf=%.2f | elapsed=%.0fms",
                 event, text, confidence, message.end_of_turn_confidence, elapsed_ms,
             )
@@ -171,10 +171,10 @@ class STTSession:
         try:
             hold_sec = settings.deepgram_eot_hold_ms / 1000.0
             await asyncio.sleep(hold_sec)
-            logger.info("STT EOT hold elapsed — dispatching final | text=%r", text)
+            logger.debug("STT EOT hold elapsed — dispatching final | text=%r", text)
             await self._on_final(text, confidence, elapsed_ms)
         except asyncio.CancelledError:
-            logger.info("STT EOT hold cancelled — user resumed speaking | text=%r", text)
+            logger.debug("STT EOT hold cancelled — user resumed speaking | text=%r", text)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -202,7 +202,7 @@ class STTSession:
         self._connected = True
 
         elapsed_ms = (time.monotonic() - t0) * 1000
-        logger.info(
+        logger.debug(
             "STT session ready | model=%s | eot_threshold=%.2f | eot_timeout_ms=%d | opened_in=%.0fms",
             settings.deepgram_stt_model,
             settings.deepgram_eot_threshold,
@@ -220,7 +220,7 @@ class STTSession:
 
     async def finish_utterance(self) -> None:
         """In v2, turn detection is fully model-driven — no manual finalize needed."""
-        logger.info("STT finish_utterance called (no-op in v2; EOT is model-driven)")
+        logger.debug("STT finish_utterance called (no-op in v2; EOT is model-driven)")
 
     async def close(self) -> None:
         self._cancel_eot_hold()
@@ -241,4 +241,4 @@ class STTSession:
                 await self._listen_task
             except asyncio.CancelledError:
                 pass
-        logger.info("STT session closed")
+        logger.debug("STT session closed")
