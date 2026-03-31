@@ -91,6 +91,10 @@ def apply_empathy_filter(
                 situation = candidate[:200]
                 break
 
+    # Skip if there's nothing to personalise with — LLM would just echo the response
+    if not first_name and not situation:
+        return speak_text
+
     user_msg = (
         f"CALLER NAME: {first_name or '(unknown)'}\n"
         f"CALLER SITUATION: {situation or '(not yet described)'}\n"

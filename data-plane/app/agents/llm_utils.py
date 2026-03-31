@@ -433,7 +433,12 @@ def llm_text_call(
     latency_ms = (time.monotonic() - t0) * 1000
     _log_metrics(tag, latency_ms, raw.input_tokens, raw.output_tokens)
     if not raw.content:
-        logger.error("llm_text_call received empty/None content from LLM")
+        logger.error(
+            "llm_text_call[%s] empty content | system=%r | user=%r",
+            tag,
+            system_prompt[:300],
+            user_message[:300],
+        )
         return ""
     text = raw.content.strip()
     logger.debug("llm_text_call latency=%.0fms response=%r", latency_ms, text[:200])
