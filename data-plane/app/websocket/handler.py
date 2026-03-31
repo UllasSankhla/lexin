@@ -563,7 +563,8 @@ async def handle_call(
                 logger.warning("speak_text empty after full chain — using recovery phrase")
                 speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
 
-            speak_text = apply_empathy_filter(speak_text, collected_all, transcript_turns)
+            agents_ran = frozenset(s.agent_id for s in invoke_steps)
+            speak_text = apply_empathy_filter(speak_text, collected_all, transcript_turns, agents_ran)
 
             session.add_assistant_turn(speak_text)
             transcript_turns.append({"role": "assistant", "content": speak_text})

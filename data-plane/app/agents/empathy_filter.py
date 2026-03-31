@@ -55,10 +55,18 @@ Output ONLY the spoken text — no labels, no JSON, no explanation.
 """
 
 
+# Responses longer than this are multi-agent composites.  Running them through
+# the filter risks the LLM early-stopping mid-sentence and adds latency for no gain.
+_MAX_WORDS_FOR_FILTER = 40
+
+
 def _should_skip(speak_text: str) -> bool:
     """Return True for responses that should not be filtered."""
     text = speak_text.strip().lower()
-    if len(text.split()) < 6:
+    words = text.split()
+    if len(words) < 6:
+        return True
+    if len(words) > _MAX_WORDS_FOR_FILTER:
         return True
     for phrase in _SKIP_PHRASES:
         if phrase in text:
@@ -70,9 +78,16 @@ def apply_empathy_filter(
     speak_text: str,
     collected: dict,
     transcript_turns: list[dict],
+    agents_ran: frozenset[str] = frozenset(),
 ) -> str:
     """Return an empathy-enhanced version of speak_text, or the original on skip/error."""
     if not speak_text or not speak_text.strip():
+        return speak_text
+
+    # EmpathyAgent already produced a warm paragraph — adding another layer is
+    # redundant and risks truncation when the LLM reproduces a long composite.
+    if "empathy" in agents_ran:
+        logger.debug("EmpathyFilter: skipping — EmpathyAgent already ran this turn")
         return speak_text
 
     if _should_skip(speak_text):
