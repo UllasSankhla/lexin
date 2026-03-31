@@ -89,22 +89,22 @@ def _build_business_context(config: dict) -> str:
 
 
 _SYSTEM_TEMPLATE = """\
-You are {persona}, an AI receptionist handling a voice call.
-The caller has asked a question. Use ONLY the business context below to answer.
+You are {persona}, an AI receptionist. You are in the MIDDLE of an ongoing voice \
+call — the caller is already speaking with you. Do NOT greet them, say "Hi", \
+say "Thanks for calling", or introduce yourself in any way.
 
-GUARDRAILS — you MUST follow these:
-1. Answer only from the provided context. Do not invent or speculate.
-2. If the answer is not in the context, say exactly:
-   "I don't have that specific information, but one of our team members will be happy to follow up with you."
-3. Answer only questions about the firm, its services, the call process, or the information being collected.
-4. LEGAL QUESTIONS — CRITICAL: If the caller asks any substantive legal question about \
-their specific matter — including but not limited to: H1B portability, I-140 status, \
-priority dates, visa strategy, EAD renewals, employment law case assessment, whether \
-they have a case, legal outcomes, or any immigration/employment/family law specifics — \
-you must NOT attempt to answer. Instead respond with exactly: \
-"That's a great question for our legal team — I'll make sure to note it so the attorney \
-can address it directly in your consultation."
-5. Keep your response to 1-2 sentences — warm, conversational, voice-call style.
+The caller has just asked a question mid-conversation. You MUST give an extremely \
+conservative, generic response — do not attempt to answer the question itself.
+
+GUARDRAILS — you MUST follow all of these without exception:
+1. NEVER answer the question. Always defer to the team.
+2. Respond in exactly 1 sentence: acknowledge you don't have that information \
+right now and that you have noted it for the team to follow up.
+   Example: "I don't have that information on hand, but I've noted your question \
+and a team member will make sure to follow up with you on that."
+3. Do NOT greet, introduce, or re-introduce yourself mid-call.
+4. Do NOT speculate, invent, or answer from the business context below.
+5. Keep your response to 1 sentence — warm, conversational, voice-call style.
 
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 BUSINESS CONTEXT
@@ -134,7 +134,7 @@ class FallbackAgent(AgentBase):
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
         try:
-            speak = llm_text_call(system, user_msg, max_tokens=1024, history=llm_history, tag="fallback")
+            speak = llm_text_call(system, user_msg, max_tokens=2048, history=llm_history, tag="fallback")
         except Exception as exc:
             logger.warning("FallbackAgent LLM call failed: %s", exc)
             speak = (
@@ -146,10 +146,13 @@ class FallbackAgent(AgentBase):
         llm_history.add("assistant", speak)
         internal_state["llm_history"] = llm_history.to_list()
 
-        # Accumulate notes for post-call review
+        # Accumulate notes and structured question list for post-call review
         new_note = f"Question: {utterance}"
         updated_notes = (existing_notes + "\n" + new_note).strip() if existing_notes else new_note
         internal_state["notes"] = updated_notes
+        caller_questions: list = internal_state.get("caller_questions", [])
+        caller_questions.append(utterance)
+        internal_state["caller_questions"] = caller_questions
 
         logger.info("FallbackAgent: answered utterance=%r speak=%r", utterance[:80], speak[:80])
 
