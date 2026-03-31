@@ -425,6 +425,23 @@ a name, a date, an address, etc.) — regardless of pending_confirmation state:
     queue it, and re-ask for the pending field in the same response
   - Never discard field data because a confirmation was outstanding
 
+PHONETIC / SPELLED-OUT RE-STATEMENT RULE — CRITICAL:
+When a caller spells out a value letter-by-letter or via NATO phonetic alphabet
+while pending_confirmation is active for THAT SAME field:
+- Decode the spelling to extract the value.
+- If the decoded value MATCHES what is already in pending_confirmation:
+    → This is a spelling clarification, NOT a "yes" response.
+    → Keep pending_confirmation unchanged with the same decoded value.
+    → Re-read the value back and ask for an explicit yes/no:
+       "So that's Kavita Sharma — is that correct?"
+    → Do NOT advance to the next field in this turn.
+    → Do NOT treat this as intent=confirm.
+- If the decoded value DIFFERS from pending_confirmation:
+    → Treat as intent=correction; update pending_confirmation with the new value.
+    → Re-read the corrected value and ask to confirm.
+A phonetic spelling is NEVER a yes/no confirmation signal. Always require an
+explicit "yes" before recording the value and moving to the next field.
+
 Only interpret as yes/no when the utterance contains NO extractable field values:
 - YES signals: "yes", "yep", "correct", "that's right", "uh huh", "sure",
                "sounds good", "affirmative", "go ahead"
@@ -543,6 +560,10 @@ Classify the caller's response into exactly one of four categories:
 "correct_or_add" — contains new field data (phone digits, email, name, date, etc.)
                    regardless of whether the caller also agrees or disagrees
                    (e.g. "no it's 415-555-1234", "yes and my email is...", "four one five...")
+                   IMPORTANT: a phonetic or letter-by-letter spelling of a name or value
+                   is ALWAYS "correct_or_add" — never "confirm", even if the decoded value
+                   appears to match what the AI already has. Phonetic spellings require
+                   explicit re-readback and a fresh yes/no from the caller.
 
 "unrelated"      — a question, off-topic remark, or anything that is NOT a yes/no/correction
                    (e.g. "how long does this take?", "do you need my address?", "what is this for?")
@@ -964,7 +985,7 @@ class DataCollectionAgent(AgentBase):
         remaining_all = [p for p in parameters if p["name"] not in collected]
         required_remaining = [p for p in remaining_all if p.get("required", True)]
 
-        if not remaining_all and not new_pending:
+        if not required_remaining and not new_pending:
             speak = result.speak or "Perfect, I have all the information I need."
             return SubagentResponse(
                 status=AgentStatus.COMPLETED,
@@ -1131,7 +1152,8 @@ class DataCollectionAgent(AgentBase):
         }
 
         remaining_all = [p for p in parameters if p["name"] not in collected]
-        if not remaining_all and not new_pending:
+        required_remaining = [p for p in remaining_all if p.get("required", True)]
+        if not required_remaining and not new_pending:
             speak = "Perfect, I have everything I need."
             self._record_history(utterance, speak, internal_state)
             return SubagentResponse(
