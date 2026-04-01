@@ -63,7 +63,7 @@
   let bargeInAnalyser = null;
   let bargeInData = null;
   let bargeInFrame = null;
-  const BARGE_IN_RMS_THRESHOLD = 0.02;  // ~human speech level; tune if needed
+  const BARGE_IN_RMS_THRESHOLD = 0.2;  // ~human speech level; tune if needed
 
   const JITTER_BUFFER_MIN_CHUNKS = 2;  // accumulate this many chunks before starting playback
   let callId = null;
