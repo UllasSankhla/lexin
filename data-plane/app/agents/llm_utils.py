@@ -7,8 +7,6 @@ import re
 import time
 from typing import TYPE_CHECKING, NamedTuple
 
-import anthropic
-import openai as openai_sdk
 from cerebras.cloud.sdk import Cerebras
 from app.config import settings
 from app.pipeline.llm import _call_with_retry  # reuse retry logic
@@ -24,15 +22,8 @@ _client_provider: str | None = None
 
 def _get_client():
     global _client, _client_provider
-    provider = settings.llm_provider
-    if _client is None or _client_provider != provider:
-        if provider == "anthropic":
-            _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        elif provider == "openai":
-            _client = openai_sdk.OpenAI(api_key=settings.openai_api_key)
-        else:
-            _client = Cerebras(api_key=settings.cerebras_api_key)
-        _client_provider = provider
+    if _client is None:
+        _client = Cerebras(api_key=settings.cerebras_api_key)
     return _client
 
 
@@ -42,13 +33,11 @@ class _LLMRaw(NamedTuple):
     output_tokens: int
 
 
-def _extract_tokens(response, provider: str) -> tuple[int, int]:
-    """Return (input_tokens, output_tokens) from any provider response."""
+def _extract_tokens(response) -> tuple[int, int]:
+    """Return (input_tokens, output_tokens) from a Cerebras response."""
     usage = getattr(response, "usage", None)
     if not usage:
         return 0, 0
-    if provider == "anthropic":
-        return getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0)
     return getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0)
 
 
@@ -61,41 +50,18 @@ def _log_metrics(tag: str, latency_ms: float, input_tokens: int, output_tokens: 
 
 
 def _llm_call(system_prompt: str, messages: list[dict], max_tokens: int, temperature: float) -> _LLMRaw:
-    """Route a chat completion through the configured provider and return an _LLMRaw."""
-    provider = settings.llm_provider
+    """Make a Cerebras chat completion and return an _LLMRaw."""
     client = _get_client()
-    if provider == "anthropic":
-        response = _call_with_retry(
-            client,
-            model=settings.anthropic_model,
-            system=system_prompt,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        content = response.content[0].text if response.content else ""
-        in_tok, out_tok = _extract_tokens(response, provider)
-    elif provider == "openai":
-        full_messages = [{"role": "system", "content": system_prompt}] + messages
-        response = _call_with_retry(
-            client,
-            model=settings.openai_model,
-            messages=full_messages,
-            max_completion_tokens=max_tokens,
-        )
-        content = response.choices[0].message.content if response.choices else ""
-        in_tok, out_tok = _extract_tokens(response, provider)
-    else:
-        full_messages = [{"role": "system", "content": system_prompt}] + messages
-        response = _call_with_retry(
-            client,
-            model=settings.cerebras_model,
-            messages=full_messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        content = response.choices[0].message.content if response.choices else ""
-        in_tok, out_tok = _extract_tokens(response, provider)
+    full_messages = [{"role": "system", "content": system_prompt}] + messages
+    response = _call_with_retry(
+        client,
+        model=settings.cerebras_model,
+        messages=full_messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    content = response.choices[0].message.content if response.choices else ""
+    in_tok, out_tok = _extract_tokens(response)
     return _LLMRaw(content, in_tok, out_tok)
 
 
@@ -289,94 +255,29 @@ def llm_structured_call(
     Raises ValueError if parsing or validation fails.
     """
     t0 = time.monotonic()
-    provider = settings.llm_provider
-
-    if provider == "openai":
-        # Use json_object mode to guarantee valid JSON, then validate with Pydantic
-        client = _get_client()
-        messages = [{"role": "system", "content": system_prompt}] + _build_messages(user_message, history)
-        response = _call_with_retry(
-            client,
-            model=settings.openai_model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            max_completion_tokens=max_tokens,
-        )
-        latency_ms = (time.monotonic() - t0) * 1000
-        in_tok, out_tok = _extract_tokens(response, provider)
-        _log_metrics(tag, latency_ms, in_tok, out_tok)
-        content = response.choices[0].message.content if response.choices else None
-        if not content:
-            raise ValueError("LLM returned empty content")
-        try:
-            return response_model.model_validate_json(content)
-        except Exception as exc:
-            logger.error("llm_structured_call (openai) validation failed: %s | raw=%r", exc, content[:300])
-            raise ValueError(f"LLM structured response validation failed: {exc}") from exc
 
     client = _get_client()
     user_msgs = _build_messages(user_message, history)
     full_messages = [{"role": "system", "content": system_prompt}] + user_msgs
 
-    if provider == "anthropic":
-        # JSON prefill: append assistant turn starting with `{` to force JSON output.
-        prefill_msgs = user_msgs + [{"role": "assistant", "content": "{"}]
-        response = _call_with_retry(
-            client,
-            model=settings.anthropic_model,
-            system=system_prompt,
-            messages=prefill_msgs,
-            max_tokens=max_tokens,
-            temperature=0.1,
-        )
-        raw_content = response.content[0].text if response.content else ""
-        in_tok, out_tok = _extract_tokens(response, provider)
-
-        # If the model ignored the prefill, retry with an explicit correction.
-        if raw_content and not raw_content.lstrip().startswith("{"):
-            logger.debug("llm_structured_call: prefill ignored, retrying with JSON correction")
-            correction = (
-                f"{user_message}\n\n"
-                "IMPORTANT: Your previous response was not valid JSON. "
-                'Respond ONLY with a JSON object starting with {"'
-            )
-            retry_resp = _call_with_retry(
-                client,
-                model=settings.anthropic_model,
-                system=system_prompt,
-                messages=user_msgs + [{"role": "user", "content": correction}],
-                max_tokens=max_tokens,
-                temperature=0.1,
-            )
-            raw_content = retry_resp.content[0].text if retry_resp.content else raw_content
-            r_in, r_out = _extract_tokens(retry_resp, provider)
-            in_tok, out_tok = in_tok + r_in, out_tok + r_out
-
-        # Prepend `{` if the API omitted it (continuation mode).
-        stripped = raw_content.lstrip() if raw_content else ""
-        if stripped and not stripped.startswith("{"):
-            raw_content = "{" + stripped
-    else:
-        # Cerebras: use native structured outputs (json_schema + strict) —
-        # guarantees valid JSON matching the Pydantic model schema.
-        schema = _make_cerebras_schema(response_model)
-        response = _call_with_retry(
-            client,
-            model=settings.cerebras_model,
-            messages=full_messages,
-            max_tokens=max_tokens,
-            temperature=0.1,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": response_model.__name__.lower(),
-                    "strict": True,
-                    "schema": schema,
-                },
+    schema = _make_cerebras_schema(response_model)
+    response = _call_with_retry(
+        client,
+        model=settings.cerebras_model,
+        messages=full_messages,
+        max_tokens=max_tokens,
+        temperature=0.1,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_model.__name__.lower(),
+                "strict": True,
+                "schema": schema,
             },
-        )
-        raw_content = response.choices[0].message.content if response.choices else ""
-        in_tok, out_tok = _extract_tokens(response, provider)
+        },
+    )
+    raw_content = response.choices[0].message.content if response.choices else ""
+    in_tok, out_tok = _extract_tokens(response)
 
     latency_ms = (time.monotonic() - t0) * 1000
     _log_metrics(tag, latency_ms, in_tok, out_tok)

@@ -1,4 +1,4 @@
-"""LLM integration — supports Anthropic Claude and Cerebras (switchable via LLM_PROVIDER)."""
+"""LLM integration — Cerebras only."""
 from __future__ import annotations
 
 import logging
@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, Optional
 # Beyond 6 retries (~1.6 s total wait) we've waited long enough for a sync response.
 _RETRY_DELAYS = tuple(0.025 * (2 ** i) for i in range(6))  # (0.025, 0.05, 0.1, 0.2, 0.4, 0.8)
 
-import anthropic
-import openai as openai_sdk
 from cerebras.cloud.sdk import Cerebras
 
 from app.config import settings
@@ -22,18 +20,13 @@ def _call_with_retry(client, **kwargs) -> object:
     """
     Call the LLM client with exponential-backoff retries.
 
-    Routes to client.messages.create (Anthropic) or client.chat.completions.create
-    (OpenAI / Cerebras) based on client type.
+    Calls client.chat.completions.create (OpenAI / Cerebras).
     Raises the last exception if all retries are exhausted.
     """
-    use_anthropic = isinstance(client, anthropic.Anthropic)
     last_exc: Exception | None = None
     for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
         try:
-            if use_anthropic:
-                return client.messages.create(**kwargs)
-            else:
-                return client.chat.completions.create(**kwargs)
+            return client.chat.completions.create(**kwargs)
         except Exception as exc:
             last_exc = exc
             # Never retry client errors (4xx) — they indicate a bad request that
@@ -131,22 +124,11 @@ class LLMClient:
     """Synchronous wrapper around the configured LLM provider (run in executor for async use)."""
 
     def __init__(self, system_prompt: str):
-        self._provider = settings.llm_provider
-        if self._provider == "anthropic":
-            self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            self._model = settings.anthropic_model
-            self._max_tokens = settings.anthropic_max_tokens
-            self._temperature = settings.anthropic_temperature
-        elif self._provider == "openai":
-            self._client = openai_sdk.OpenAI(api_key=settings.openai_api_key)
-            self._model = settings.openai_model
-            self._max_tokens = settings.openai_max_tokens
-            self._temperature = settings.openai_temperature
-        else:
-            self._client = Cerebras(api_key=settings.cerebras_api_key)
-            self._model = settings.cerebras_model
-            self._max_tokens = settings.cerebras_max_tokens
-            self._temperature = settings.cerebras_temperature
+        self._provider = "cerebras"
+        self._client = Cerebras(api_key=settings.cerebras_api_key)
+        self._model = settings.cerebras_model
+        self._max_tokens = settings.cerebras_max_tokens
+        self._temperature = settings.cerebras_temperature
         self._system_prompt = system_prompt
 
     def complete(
@@ -172,39 +154,16 @@ class LLMClient:
         )
 
         t0 = time.monotonic()
-        if self._provider == "anthropic":
-            messages = [m for m in conversation_history if m.get("role") in ("user", "assistant")]
-            response = _call_with_retry(
-                self._client,
-                model=self._model,
-                system=system_content,
-                messages=messages,
-                max_tokens=self._max_tokens,
-                temperature=self._temperature,
-            )
-            text = response.content[0].text.strip() if response.content else ""
-            tokens = (response.usage.input_tokens + response.usage.output_tokens) if response.usage else 0
-        elif self._provider == "openai":
-            messages = [{"role": "system", "content": system_content}] + conversation_history
-            response = _call_with_retry(
-                self._client,
-                model=self._model,
-                messages=messages,
-                max_completion_tokens=self._max_tokens,
-            )
-            text = response.choices[0].message.content.strip()
-            tokens = (response.usage.completion_tokens or 0) + (response.usage.prompt_tokens or 0) if response.usage else 0
-        else:
-            messages = [{"role": "system", "content": system_content}] + conversation_history
-            response = _call_with_retry(
-                self._client,
-                model=self._model,
-                messages=messages,
-                max_tokens=self._max_tokens,
-                temperature=self._temperature,
-            )
-            text = response.choices[0].message.content.strip()
-            tokens = response.usage.total_tokens if response.usage else 0
+        messages = [{"role": "system", "content": system_content}] + conversation_history
+        response = _call_with_retry(
+            self._client,
+            model=self._model,
+            messages=messages,
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
+        )
+        text = response.choices[0].message.content.strip()
+        tokens = response.usage.total_tokens if response.usage else 0
         latency_ms = (time.monotonic() - t0) * 1000
 
         # ── Response logging ──────────────────────────────────────────────────
