@@ -63,7 +63,11 @@
   let bargeInAnalyser = null;
   let bargeInData = null;
   let bargeInFrame = null;
-  const BARGE_IN_RMS_THRESHOLD = 0.2;  // ~human speech level; tune if needed
+  const BARGE_IN_RMS_THRESHOLD = 0.2;    // ~human speech level; tune if needed
+  const BARGE_IN_DEBOUNCE_FRAMES = 4;    // consecutive frames above threshold required before firing
+  const BARGE_IN_GRACE_MS = 400;         // ignore barge-in for this long after TTS starts (echo suppression)
+  let bargeInConsecutiveFrames = 0;
+  let bargeInGraceActive = false;
 
   const JITTER_BUFFER_MIN_CHUNKS = 2;  // accumulate this many chunks before starting playback
   let callId = null;
@@ -700,6 +704,7 @@
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: {
       echoCancellation: true,
       noiseSuppression: true,
+      autoGainControl: false,
       sampleRate: 16000,
       channelCount: 1,
     }});
@@ -764,19 +769,31 @@
 
   function startBargeInMonitor() {
     stopBargeInMonitor();
+    bargeInConsecutiveFrames = 0;
+    bargeInGraceActive = true;
+    setTimeout(() => { bargeInGraceActive = false; }, BARGE_IN_GRACE_MS);
     function poll() {
       if (state !== STATES.SPEAKING) return;  // stop polling once TTS ends
+      if (bargeInGraceActive) {
+        bargeInFrame = requestAnimationFrame(poll);
+        return;
+      }
       const rms = _bargeInRMS();
       if (rms >= BARGE_IN_RMS_THRESHOLD) {
-        log('Barge-in triggered | rms=', rms.toFixed(4));
-        // Tell server to cancel TTS
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'client.barge_in', seq: ++wsSeq, ts: Date.now() / 1000, payload: {} }));
+        bargeInConsecutiveFrames++;
+        if (bargeInConsecutiveFrames >= BARGE_IN_DEBOUNCE_FRAMES) {
+          log('Barge-in triggered | rms=', rms.toFixed(4), '| frames=', bargeInConsecutiveFrames);
+          // Tell server to cancel TTS
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'client.barge_in', seq: ++wsSeq, ts: Date.now() / 1000, payload: {} }));
+          }
+          // Stop local TTS playback immediately
+          stopAudioPlayback();
+          setState(STATES.ACTIVE);
+          return;  // don't reschedule
         }
-        // Stop local TTS playback immediately
-        stopAudioPlayback();
-        setState(STATES.ACTIVE);
-        return;  // don't reschedule
+      } else {
+        bargeInConsecutiveFrames = 0;  // reset on any quiet frame
       }
       bargeInFrame = requestAnimationFrame(poll);
     }
