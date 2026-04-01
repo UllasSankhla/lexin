@@ -119,7 +119,7 @@ def apply_empathy_filter(
     )
 
     try:
-        enhanced = llm_text_call(_EMPATHY_SYSTEM, user_msg, max_tokens=256, tag="empathy_filter")
+        enhanced = llm_text_call(_EMPATHY_SYSTEM, user_msg, max_tokens=512, tag="empathy_filter")
         if enhanced and enhanced.strip():
             logger.debug("EmpathyFilter: %r → %r", speak_text[:60], enhanced[:60])
             return enhanced.strip()
