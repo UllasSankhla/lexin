@@ -481,7 +481,9 @@ class Planner:
                 field = intent.field
                 if field:
                     steps.append(PlanStep(action="reset_fields", fields=[field], reason="CORRECTION"))
-                if "data_collection" in available_ids:
+                # data_collection may be COMPLETED (excluded from available_ids) but the
+                # reset_fields step above will reopen it — always invoke it for CORRECTION.
+                if "data_collection" in available_ids or "data_collection" in self._graph.nodes:
                     steps.append(PlanStep(action="invoke", agent_id="data_collection", reason="CORRECTION"))
                     last_invoke_agent = "data_collection"
 
@@ -571,6 +573,12 @@ class Planner:
             return steps
 
         invoke_steps = [s for s in steps if s.action == "invoke"]
+
+        # Never inject after a farewell — the call is ending, re-surfacing a pending
+        # confirmation into a terminated call produces a speak with nowhere to go.
+        if any(s.agent_id == "farewell" for s in invoke_steps):
+            return steps
+
         waiting_step = next((s for s in invoke_steps if s.agent_id == waiting_id), None)
 
         if waiting_step is None:
