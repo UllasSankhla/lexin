@@ -223,6 +223,14 @@ def _build_mega_prompt(
         f"CALL TRANSCRIPT SO FAR\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{call_transcript}\n"
+        f"\nRECOVERY RULE: If the transcript shows the AI previously read back a\n"
+        f"value for a field that is now MISSING from 'Already collected' below AND\n"
+        f"'Awaiting confirmation' is null, the confirmation was likely cleared by\n"
+        f"accident. If the caller's recent turns assert that value is correct\n"
+        f"(e.g. 'that's the one I gave you', 'same one', 'that's right', 'yes that'),\n"
+        f"set pending_confirmation for that field with the value from the transcript\n"
+        f"read-back and ask the caller to confirm it explicitly. Do not mark status\n"
+        f"as 'completed' if any required field is missing from 'Already collected'.\n"
         if call_transcript else ""
     )
 
@@ -1035,7 +1043,26 @@ class DataCollectionAgent(AgentBase):
         # ── Step E: Return ────────────────────────────────────────────────────
         # queue_speak takes priority when we dequeued a value — it's a precise
         # readback. validation_error_speak takes priority over everything else.
-        speak = validation_error_speak or queue_speak or result.speak or "Could you please continue?"
+        #
+        # Split-brain guard: if the LLM returned status=completed but Python sees
+        # required fields still missing from collected, the LLM was reasoning from
+        # conversation context rather than state. Override its speak with a re-ask
+        # so the caller isn't falsely told "I have everything" when we don't.
+        if required_remaining and result.status == "completed":
+            logger.error(
+                "DataCollection SPLIT-BRAIN GUARD: LLM status=completed but required "
+                "fields missing from Python state: %s | collected=%s | speak=%r",
+                [p["name"] for p in required_remaining],
+                list(collected.keys()),
+                result.speak,
+            )
+            speak = (
+                self._rephrase_confirmation(new_pending, parameters)
+                if new_pending
+                else self._template_question(required_remaining[0])
+            )
+        else:
+            speak = validation_error_speak or queue_speak or result.speak or "Could you please continue?"
 
         if new_pending and not validation_error_speak:
             status = AgentStatus.WAITING_CONFIRM
@@ -1233,6 +1260,25 @@ class DataCollectionAgent(AgentBase):
         remaining_all = [p for p in parameters if p["name"] not in collected]
         required_remaining = [p for p in remaining_all if p.get("required", True)]
         if not required_remaining and not new_pending:
+            # Split-brain guard: assert collected actually contains all required fields.
+            # In _apply_confirm_yes this should always hold, but log loudly if not.
+            required_names = {p["name"] for p in parameters if p.get("required", True)}
+            missing = required_names - set(collected.keys())
+            if missing:
+                logger.error(
+                    "DataCollection SPLIT-BRAIN GUARD (confirm_yes): required fields "
+                    "missing from collected despite required_remaining being empty: %s",
+                    missing,
+                )
+                first_missing = next(p for p in parameters if p["name"] in missing)
+                speak = self._template_question(first_missing)
+                self._record_history(utterance, speak, internal_state)
+                return SubagentResponse(
+                    status=AgentStatus.IN_PROGRESS,
+                    speak=speak,
+                    internal_state=internal_state,
+                    confidence=0.3,
+                )
             speak = "Perfect, I have everything I need."
             self._record_history(utterance, speak, internal_state)
             return SubagentResponse(

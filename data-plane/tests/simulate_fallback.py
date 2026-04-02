@@ -120,76 +120,41 @@ def run_fallback(utterance: str, config: dict, history: list[dict] | None = None
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestFallbackBusinessQuestions:
-    def test_fee_structure_question(self):
-        """Should answer from the Fee Structure policy doc."""
-        speak = run_fallback(
-            "Do I have to pay anything upfront?",
-            RICH_CONFIG,
-        )
-        # Should mention contingency / no upfront fee
+class TestFallbackDefers:
+    """
+    FallbackAgent always defers — it never answers from context.
+    It notes the question and tells the caller a team member will follow up.
+    These tests verify that deferral behavior across different question types.
+    """
+
+    _DEFERRAL_KEYWORDS = (
+        "don't have", "noted", "team member", "follow up",
+        "cannot", "can't", "not on hand", "not have",
+    )
+
+    def _assert_defers(self, speak: str) -> None:
         lower = speak.lower()
-        assert any(kw in lower for kw in ("contingency", "upfront", "nothing", "no fee", "pay nothing", "win")), (
-            f"Expected contingency fee explanation, got: {speak!r}"
+        assert any(kw in lower for kw in self._DEFERRAL_KEYWORDS), (
+            f"Expected deferral response, got: {speak!r}"
+        )
+        assert len(speak.split()) <= 40, (
+            f"Deferral should be 1 concise sentence, got: {speak!r}"
         )
 
-    def test_consultation_question(self):
-        """Should answer that consultations are free."""
-        speak = run_fallback(
-            "Is the first consultation free?",
-            RICH_CONFIG,
-        )
-        lower = speak.lower()
-        assert any(kw in lower for kw in ("free", "no charge", "complimentary", "cost")), (
-            f"Expected free consultation answer, got: {speak!r}"
-        )
+    def test_defers_fee_question(self):
+        """Business question about fees — always deferred."""
+        speak = run_fallback("Do I have to pay anything upfront?", RICH_CONFIG)
+        self._assert_defers(speak)
 
-    def test_practice_area_question(self):
-        """Should describe firm's practice areas."""
-        speak = run_fallback(
-            "What kind of cases do you handle?",
-            RICH_CONFIG,
-        )
-        lower = speak.lower()
-        assert any(kw in lower for kw in ("injury", "employment", "accident", "discrimination", "personal")), (
-            f"Expected practice area info, got: {speak!r}"
-        )
+    def test_defers_practice_area_question(self):
+        """Business question about case types — always deferred."""
+        speak = run_fallback("What kind of cases do you handle?", RICH_CONFIG)
+        self._assert_defers(speak)
 
-    def test_faq_statute_of_limitations(self):
-        """Should answer from FAQ about statute of limitations."""
-        speak = run_fallback(
-            "How long do I have to file a claim after my car accident?",
-            RICH_CONFIG,
-        )
-        # Normalize non-breaking spaces before matching
-        normalized = speak.lower().replace("\u202f", " ").replace("\xa0", " ")
-        assert any(kw in normalized for kw in ("2 year", "two year", "statute", "limitation", "deadline")), (
-            f"Expected statute of limitations info, got: {speak!r}"
-        )
-
-
-class TestFallbackCollectionMetaQuestions:
-    def test_is_email_required(self):
-        """Should answer that email is required based on the parameters list."""
-        speak = run_fallback(
-            "Do you need my email address to continue?",
-            RICH_CONFIG,
-        )
-        lower = speak.lower()
-        assert any(kw in lower for kw in ("email", "address", "required", "need", "yes")), (
-            f"Expected email required answer, got: {speak!r}"
-        )
-
-    def test_is_phone_optional(self):
-        """Phone is optional in RICH_CONFIG — agent should convey that."""
-        speak = run_fallback(
-            "Is a phone number required?",
-            RICH_CONFIG,
-        )
-        lower = speak.lower()
-        assert any(kw in lower for kw in ("optional", "not required", "phone", "number")), (
-            f"Expected optional phone answer, got: {speak!r}"
-        )
+    def test_defers_collection_meta_question(self):
+        """Question about what info is being collected — always deferred."""
+        speak = run_fallback("Do you need my email address to continue?", RICH_CONFIG)
+        self._assert_defers(speak)
 
 
 class TestFallbackGuardrails:
