@@ -20,6 +20,17 @@ class FAQMatchResult(BaseModel):
     index: Optional[int] = None
 
 
+class FAQQuestionMatch(BaseModel):
+    """Single question extracted from a multi-question utterance."""
+    is_legal: bool
+    faq_index: Optional[int] = None  # None if no FAQ match or is_legal=True
+
+
+class FAQMultiMatchResult(BaseModel):
+    """All questions detected in a caller utterance with per-question match results."""
+    questions: list[FAQQuestionMatch]
+
+
 # ── Scheduling ────────────────────────────────────────────────────────────────
 
 class SlotConfirmSignal(BaseModel):

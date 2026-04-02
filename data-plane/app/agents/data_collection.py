@@ -746,6 +746,40 @@ class DataCollectionAgent(AgentBase):
                 confidence=0.3,
             )
 
+        # ── Steering: pending field fence ─────────────────────────────────────
+        # Deterministic post-extraction check: while a required field is awaiting
+        # confirmation, the LLM must not jump to pending_confirmation for a
+        # different field without first resolving the current one.
+        # One retry only — append correction guidance to the user message and
+        # re-run dc_extract. This catches the "new → MetLife ID" class of bugs
+        # where the LLM sidesteps an unresolved yes/no by extracting elsewhere.
+        steering_guidance = self._pending_field_fence(result, pending)
+        if steering_guidance:
+            logger.warning(
+                "Steering[pending_field_fence]: violation detected — retrying | "
+                "pending=%s llm_new_pending=%s utterance=%r",
+                pending["field"] if pending else None,
+                result.pending_confirmation.field if result.pending_confirmation else None,
+                utterance[:60],
+            )
+            steered_msg = f"{steering_guidance}\n\nCaller said: \"{utterance}\""
+            try:
+                result = llm_structured_call(
+                    system,
+                    steered_msg,
+                    DataCollectionLLMResponse,
+                    max_tokens=2048,
+                    history=llm_history,
+                    tag="dc_extract_steered",
+                )
+                logger.info(
+                    "Steering[pending_field_fence]: retry result — intent=%s pending=%s",
+                    result.intent,
+                    result.pending_confirmation.field if result.pending_confirmation else None,
+                )
+            except Exception as exc:
+                logger.warning("Steering retry failed (%s) — proceeding with original result", exc)
+
         # ── Update conversation history ───────────────────────────────────────
         # Cap at last 8 entries (4 agent turns) — the full call transcript is
         # already in the system prompt so the LLM has complete context there.
@@ -1026,6 +1060,48 @@ class DataCollectionAgent(AgentBase):
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _pending_field_fence(
+        self,
+        result: "DataCollectionLLMResponse",
+        pending: dict | None,
+    ) -> str | None:
+        """
+        Steering handler: pending field fence.
+
+        While a field is awaiting yes/no confirmation, the LLM must not set
+        pending_confirmation for a DIFFERENT field without first resolving the
+        current one (via intent confirm_yes / confirm_no / correction).
+
+        Returns a correction string to inject into a retry if violated,
+        or None if the result is structurally clean.
+
+        Does NOT block result.extracted — those go to extraction_queue and
+        are fine to collect in the same turn (multi-field acquisition support).
+        """
+        if pending is None:
+            return None
+
+        new_pend = result.pending_confirmation
+        if new_pend is None:
+            return None
+
+        # LLM resolved the current pending via intent — allowed to move on
+        if result.intent in ("confirm_yes", "confirm_no", "correction"):
+            return None
+
+        # Violation: LLM jumped to a different field's confirmation without
+        # resolving the outstanding yes/no for the current pending field
+        if new_pend.field != pending["field"]:
+            return (
+                f"STEERING CORRECTION: '{pending['field']}' is still awaiting "
+                f"the caller's yes or no (pending value: '{pending['value']}'). "
+                f"Do not set pending_confirmation for '{new_pend.field}' until "
+                f"'{pending['field']}' is resolved. "
+                f"Re-ask the caller: is '{pending['value']}' correct?"
+            )
+
+        return None
 
     def _template_question(self, param: dict) -> str:
         field_type = param.get("data_type", "text")
