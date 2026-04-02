@@ -193,7 +193,37 @@ class SchedulingAgent(AgentBase):
                 slot_num = result.slot
                 if slot_num is not None:
                     idx = int(slot_num) - 1
-                    if 0 <= idx < len(slots_data):
+                    # ── Steering: slot choice bounds guard ────────────────────
+                    bounds_issue = self._slot_choice_bounds_guard(idx, slots_data)
+                    if bounds_issue:
+                        logger.warning(
+                            "Steering[slot_choice_bounds]: %s | slot_num=%s len=%d",
+                            bounds_issue, slot_num, len(slots_data),
+                        )
+                        # Retry slot choice with corrected context
+                        numbered_retry = "\n".join(
+                            f"{i+1}. {s['description']}" for i, s in enumerate(slots_data)
+                        )
+                        correction = (
+                            f"STEERING CORRECTION: {bounds_issue} "
+                            f"Valid slot numbers are 1 to {len(slots_data)}. "
+                            f"Re-read the list and return the correct slot number.\n\n"
+                            f"Available slots:\n{numbered_retry}\nCaller said: \"{utterance}\""
+                        )
+                        try:
+                            result = llm_structured_call(
+                                "Identify which slot the caller chose based on their description. "
+                                "Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
+                                correction,
+                                SlotChoice,
+                                tag="scheduling_slot_choice_steered",
+                            )
+                            slot_num = result.slot
+                            idx = int(slot_num) - 1 if slot_num is not None else -1
+                        except Exception as exc:
+                            logger.warning("Steering slot choice retry failed: %s", exc)
+                            slot_num = None
+                    if slot_num is not None and 0 <= idx < len(slots_data):
                         chosen = slots_data[idx]
                         internal_state["chosen_slot_id"] = idx
                         internal_state["stage"] = "awaiting_confirm"
@@ -299,6 +329,29 @@ class SchedulingAgent(AgentBase):
         logger.info("SchedulingAgent: confirmation intent=%r | utterance=%r", intent, utterance[:60])
 
         if intent == "confirm":
+            # ── Steering: pre-booking preflight ──────────────────────────────
+            # Runs before book_time_slot — the only irreversible action in the
+            # pipeline. Validates slot data integrity and confirms the slot
+            # being booked matches what the caller was presented.
+            preflight_issue = self._booking_preflight(chosen_data, internal_state)
+            if preflight_issue:
+                logger.error(
+                    "Steering[booking_preflight]: blocked booking | reason=%s | chosen_idx=%s slot=%s",
+                    preflight_issue,
+                    internal_state.get("chosen_slot_id"),
+                    chosen_data,
+                )
+                speak = (
+                    "I'm sorry, something doesn't look right with that slot. "
+                    "Let me pull up the available times again."
+                )
+                internal_state["stage"] = "awaiting_choice"
+                internal_state["retry_count"] = 0
+                return SubagentResponse(
+                    status=AgentStatus.IN_PROGRESS,
+                    speak=speak,
+                    internal_state=internal_state,
+                )
             if not chosen_data:
                 return SubagentResponse(
                     status=AgentStatus.COMPLETED,
@@ -345,3 +398,79 @@ class SchedulingAgent(AgentBase):
 
         # new_slot — caller wants a different time; let _handle_choice parse the preference
         return self._handle_choice(utterance, internal_state, config)
+
+    # ── Steering handlers ─────────────────────────────────────────────────────
+
+    def _slot_choice_bounds_guard(
+        self,
+        idx: int,
+        slots_data: list,
+    ) -> str | None:
+        """
+        Steering handler: slot choice bounds guard.
+
+        After the LLM returns a slot index, verify it falls within the
+        available_slots list before accessing it. Returns None if valid,
+        or a correction string if out of bounds.
+
+        Prevents IndexError and silent retry loops when Calendly returns
+        fewer slots than the LLM expects (e.g. after a narrow date search).
+        """
+        if not slots_data:
+            return "No slots are available — cannot pick from an empty list."
+        if idx < 0 or idx >= len(slots_data):
+            return (
+                f"Slot index {idx + 1} is out of range — "
+                f"only {len(slots_data)} slot(s) available (1 to {len(slots_data)})."
+            )
+        return None
+
+    def _booking_preflight(
+        self,
+        chosen_data: dict | None,
+        internal_state: dict,
+    ) -> str | None:
+        """
+        Steering handler: pre-booking preflight.
+
+        Runs before book_time_slot() — the only irreversible action in the
+        pipeline. Validates that the slot in state is complete and consistent
+        with what was presented to the caller for confirmation.
+
+        Returns None if safe to proceed, or a reason string if the booking
+        should be blocked and the agent should re-present slots.
+
+        Checks:
+          1. A slot is actually selected (chosen_data is not None)
+          2. slot_id is present (Calendly needs it for the API call)
+          3. start_time is present and parses as a valid ISO datetime
+          4. The slot description matches pending_confirmation["slot"] —
+             i.e. the slot being booked is the one the caller confirmed,
+             not a different slot at the same index position
+        """
+        if chosen_data is None:
+            return "No slot selected in state — chosen_slot_id points to nothing."
+
+        if not chosen_data.get("slot_id"):
+            return f"Slot is missing slot_id: {chosen_data}"
+
+        start_time_str = chosen_data.get("start_time", "")
+        if not start_time_str:
+            return f"Slot is missing start_time: {chosen_data}"
+        try:
+            datetime.fromisoformat(start_time_str)
+        except ValueError:
+            return f"Slot start_time is not a valid ISO datetime: {start_time_str!r}"
+
+        # Guard: description must match what was presented to the caller
+        pending = internal_state.get("pending_confirmation") or {}
+        confirmed_desc = pending.get("slot", "")
+        slot_desc = chosen_data.get("description", "")
+        if confirmed_desc and slot_desc and confirmed_desc != slot_desc:
+            return (
+                f"Slot mismatch: caller confirmed '{confirmed_desc}' but "
+                f"chosen_slot_id points to '{slot_desc}'. "
+                f"These must be the same slot."
+            )
+
+        return None  # all clear — safe to book
