@@ -556,6 +556,9 @@ Classify the caller's response into exactly one of four categories:
 
 "reject"         — pure no/disagreement, no new field data
                    (e.g. "no", "nope", "wrong", "that's not right")
+                   Also classify as "reject" common single-word STT misreadings of
+                   "no" when spoken in isolation during a yes/no confirmation:
+                   "new", "knew", "now", "nah", "na", "naw", "nuh"
 
 "correct_or_add" — contains new field data (phone digits, email, name, date, etc.)
                    regardless of whether the caller also agrees or disagrees
@@ -1107,7 +1110,7 @@ class DataCollectionAgent(AgentBase):
             )
         except Exception as exc:
             logger.warning("Confirmation classifier failed (%s) — defaulting to mega-prompt", exc)
-            return ConfirmationSignal(signal="correct_or_add", is_affirmative=True)
+            return ConfirmationSignal(signal="unrelated", is_affirmative=False)
 
     def _apply_confirm_yes(
         self,
