@@ -194,7 +194,17 @@ def _build_mega_prompt(
     workflow_stages: str = "",
     call_transcript: str = "",
     policy_docs: list[dict] | None = None,
-) -> str:
+) -> tuple[str, str]:
+    """
+    Returns (system_prompt, user_context) for the dc_extract LLM call.
+
+    system_prompt — static per config: persona, rules, field definitions.
+      Same across all turns for a given caller/config → enables KV-cache reuse.
+
+    user_context — dynamic per turn: workflow stages, call transcript,
+      current collection state (collected + pending). Passed as the user
+      message alongside the caller's utterance.
+    """
     fields_block = _build_fields_block(parameters)
     intake_flow = _build_intake_flow_block(parameters)
     collected_json = json.dumps(collected, indent=2) if collected else "{}"
@@ -234,7 +244,8 @@ def _build_mega_prompt(
         if call_transcript else ""
     )
 
-    return f"""\
+    # ── System prompt: static per config ─────────────────────────────────────
+    system_prompt = f"""\
 You are an AI intake receptionist conducting a voice call on behalf of {persona_name}.
 Your role right now is to collect specific information from the caller.
 Be warm, patient, and concise — this is a voice call, not a form.
@@ -543,7 +554,10 @@ Rules:
 - speak is "" when cannot_process=true
 - pending_confirmation is ALWAYS preserved unchanged on unhandled responses
 - Queue only one pending_confirmation at a time; extras wait for the next turn
+"""
 
+    # ── User context: dynamic per turn ────────────────────────────────────────
+    user_context = f"""\
 {stages_block}{transcript_block}\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
 CURRENT COLLECTION STATE
 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
@@ -553,6 +567,8 @@ Already collected and confirmed:
 Awaiting caller's yes/no confirmation for:
 {pending_json}
 """
+
+    return system_prompt, user_context
 
 
 _CONFIRM_CLASSIFIER_SYSTEM = """\
@@ -717,9 +733,9 @@ class DataCollectionAgent(AgentBase):
         workflow_stages = config.get("_workflow_stages", "")
         call_transcript = _format_call_transcript(history)
         policy_docs = config.get("global_policy_documents", [])
-        system = _build_mega_prompt(parameters, collected, pending, persona, workflow_stages, call_transcript, policy_docs)
+        system, user_context = _build_mega_prompt(parameters, collected, pending, persona, workflow_stages, call_transcript, policy_docs)
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
-        user_msg = f'{mega_prompt_hint}Caller said: "{utterance}"'
+        user_msg = f'{user_context}{mega_prompt_hint}Caller said: "{utterance}"'
 
         try:
             result = llm_structured_call(
@@ -770,7 +786,7 @@ class DataCollectionAgent(AgentBase):
                 result.pending_confirmation.field if result.pending_confirmation else None,
                 utterance[:60],
             )
-            steered_msg = f"{steering_guidance}\n\nCaller said: \"{utterance}\""
+            steered_msg = f"{user_context}{steering_guidance}\n\nCaller said: \"{utterance}\""
             try:
                 result = llm_structured_call(
                     system,
