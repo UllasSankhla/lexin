@@ -72,8 +72,7 @@ _NOT_QUALIFIED_SPEAK_SYSTEM = (
 
 _NOT_QUALIFIED_REFERRAL_SYSTEM = (
     "You are an AI receptionist at a law firm. The caller's matter does not fall "
-    "within the firm's practice areas. The firm has provided a referral suggestion: "
-    "{referral_suggestion}. "
+    "within the firm's practice areas. The firm has provided a referral suggestion. "
     "In two to three sentences: apologise that you are unable to assist, state the "
     "practice areas the firm does handle (provided below), include the referral "
     "suggestion naturally, and close warmly. Voice-call style — no lists, no bullet points."
@@ -238,7 +237,7 @@ class IntakeQualificationAgent(AgentBase):
         if decision == "not_qualified":
             referral = _get_referral_suggestion(practice_areas, matched_area)
             speak_system = (
-                _NOT_QUALIFIED_REFERRAL_SYSTEM.format(referral_suggestion=referral)
+                _NOT_QUALIFIED_REFERRAL_SYSTEM
                 if referral else _NOT_QUALIFIED_SPEAK_SYSTEM
             )
             area_names = [
@@ -247,6 +246,8 @@ class IntakeQualificationAgent(AgentBase):
             ]
             areas_str = ", ".join(area_names) if area_names else "general legal matters"
             user_msg = f"Caller's matter: {reason}\nFirm's supported practice areas: {areas_str}"
+            if referral:
+                user_msg += f"\nReferral suggestion: {referral}"
             speak = llm_text_call(speak_system, user_msg, tag="intake_reject_speak") or (
                 f"I'm sorry, but we're unable to assist with that type of matter. "
                 f"Our firm focuses on {areas_str}. "

@@ -89,7 +89,7 @@ def _build_business_context(config: dict) -> str:
 
 
 _SYSTEM_TEMPLATE = """\
-You are {persona}, an AI receptionist. You are in the MIDDLE of an ongoing voice \
+You are an AI receptionist. You are in the MIDDLE of an ongoing voice \
 call — the caller is already speaking with you. Do NOT greet them, say "Hi", \
 say "Thanks for calling", or introduce yourself in any way.
 
@@ -105,11 +105,6 @@ and a team member will make sure to follow up with you on that."
 3. Do NOT greet, introduce, or re-introduce yourself mid-call.
 4. Do NOT speculate, invent, or answer from the business context below.
 5. Keep your response to 1 sentence — warm, conversational, voice-call style.
-
-\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
-BUSINESS CONTEXT
-\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501
-{business_context}
 """
 
 
@@ -126,11 +121,8 @@ class FallbackAgent(AgentBase):
         persona = config.get("assistant", {}).get("persona_name", "the firm's receptionist")
         business_context = _build_business_context(config)
 
-        system = _SYSTEM_TEMPLATE.format(
-            persona=persona,
-            business_context=business_context,
-        )
-        user_msg = f'CALLER ASKED: "{utterance}"'
+        system = _SYSTEM_TEMPLATE
+        user_msg = f'PERSONA: {persona}\n\nBUSINESS CONTEXT:\n{business_context}\n\nCALLER ASKED: "{utterance}"'
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
         try:

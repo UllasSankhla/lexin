@@ -250,9 +250,9 @@ class SchedulingAgent(AgentBase):
         current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
             pref = llm_structured_call(
-                f"Today is {current_date}. Convert a natural language time preference to a UTC date range. "
+                "Convert a natural language time preference to a UTC date range. "
                 "Return JSON: {\"start_time\": \"ISO\", \"end_time\": \"ISO\"} or {\"found\": false}.",
-                f"Caller said: \"{utterance}\"",
+                f"Today is {current_date}. Caller said: \"{utterance}\"",
                 DateRangePreference,
                 tag="scheduling_date_pref",
             )
