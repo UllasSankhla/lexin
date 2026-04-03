@@ -1,0 +1,252 @@
+{
+  "data_collection": {
+    "description": "Collect first name, last name, and email \u2014 confirm each field",
+    "runs": 1,
+    "scenario_total_wall_ms": {
+      "avg": 2089.1,
+      "median": 2089.1,
+      "p99": 2089.1,
+      "max": 2089.1,
+      "min": 2089.1,
+      "n": 1
+    },
+    "scenario_total_llm_ms": {
+      "avg": 2087.6,
+      "median": 2087.6,
+      "p99": 2087.6,
+      "max": 2087.6,
+      "min": 2087.6,
+      "n": 1
+    },
+    "turns": {
+      "1": {
+        "utterance": "My name is John Smith.",
+        "wall_ms": {
+          "avg": 496.0,
+          "median": 496.0,
+          "p99": 496.0,
+          "max": 496.0,
+          "min": 496.0,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 495.7,
+          "median": 495.7,
+          "p99": 495.7,
+          "max": 495.7,
+          "min": 495.7,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.3,
+          "median": 0.3,
+          "p99": 0.3,
+          "max": 0.3,
+          "min": 0.3,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      },
+      "2": {
+        "utterance": "Yes, that's correct.",
+        "wall_ms": {
+          "avg": 181.8,
+          "median": 181.8,
+          "p99": 181.8,
+          "max": 181.8,
+          "min": 181.8,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 181.7,
+          "median": 181.7,
+          "p99": 181.7,
+          "max": 181.7,
+          "min": 181.7,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.1,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      },
+      "3": {
+        "utterance": "Yes.",
+        "wall_ms": {
+          "avg": 327.1,
+          "median": 327.1,
+          "p99": 327.1,
+          "max": 327.1,
+          "min": 327.1,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 326.9,
+          "median": 326.9,
+          "p99": 326.9,
+          "max": 326.9,
+          "min": 326.9,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.2,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.2,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      },
+      "4": {
+        "utterance": "My email is john dot smith at example dot com.",
+        "wall_ms": {
+          "avg": 271.5,
+          "median": 271.5,
+          "p99": 271.5,
+          "max": 271.5,
+          "min": 271.5,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 270.9,
+          "median": 270.9,
+          "p99": 270.9,
+          "max": 270.9,
+          "min": 270.9,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.6,
+          "median": 0.6,
+          "p99": 0.6,
+          "max": 0.6,
+          "min": 0.6,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      },
+      "5": {
+        "utterance": "Yes, that's right.",
+        "wall_ms": {
+          "avg": 202.7,
+          "median": 202.7,
+          "p99": 202.7,
+          "max": 202.7,
+          "min": 202.7,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 202.6,
+          "median": 202.6,
+          "p99": 202.6,
+          "max": 202.6,
+          "min": 202.6,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.1,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      },
+      "6": {
+        "utterance": "Confirmed.",
+        "wall_ms": {
+          "avg": 610.0,
+          "median": 610.0,
+          "p99": 610.0,
+          "max": 610.0,
+          "min": 610.0,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 609.8,
+          "median": 609.8,
+          "p99": 609.8,
+          "max": 609.8,
+          "min": 609.8,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.2,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.2,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 1
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "dc_confirm_classify": {
+        "avg": 192.1,
+        "median": 192.1,
+        "p99": 202.6,
+        "max": 202.6,
+        "min": 181.7,
+        "n": 2
+      },
+      "dc_extract": {
+        "avg": 425.8,
+        "median": 411.3,
+        "p99": 609.8,
+        "max": 609.8,
+        "min": 270.9,
+        "n": 4
+      }
+    }
+  }
+}
