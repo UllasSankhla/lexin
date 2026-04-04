@@ -14,13 +14,21 @@ from app.websocket.session import CallSession
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    format="%(asctime)s %(levelname)s [%(name)s] [%(call_id)s] %(message)s",
 )
 # basicConfig is a no-op when uvicorn has already installed root handlers.
 # Explicitly set the level on the app namespace so all app.* loggers are
 # guaranteed to emit at the configured level regardless of who set up first.
 _app_log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 logging.getLogger("app").setLevel(_app_log_level)
+
+# Attach the call-ID filter to every handler (including uvicorn's pre-installed
+# ones).  The filter injects record.call_id from a ContextVar set per-call in
+# handle_call, so every log line within a call is grep-able by call ID.
+from app.logging_context import CallIdFilter as _CallIdFilter  # noqa: E402
+_call_id_filter = _CallIdFilter()
+for _h in logging.root.handlers:
+    _h.addFilter(_call_id_filter)
 logger = logging.getLogger(__name__)
 
 

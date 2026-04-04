@@ -55,6 +55,9 @@ async def handle_call(
     """Orchestrate a call session over a WebSocket connection."""
     from app.models.call_analytics import CallAnalytics
     from app.models.call_record import CallRecord
+    from app.logging_context import call_id_var
+
+    call_id_var.set(session.call_id)
 
     seq = [0]
     config = session.config
