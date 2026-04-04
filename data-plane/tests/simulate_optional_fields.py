@@ -34,24 +34,26 @@ def _param(name: str, label: str, dtype: str, required: bool, order: int) -> dic
     }
 
 
-# required → optional → required  (optional is mid-sequence, non-name to avoid
-# LLM conflating first/middle into a single "full name" question)
+# required → optional → required  (optional is mid-sequence; metlife_id is a
+# plain text field with no special extraction rules, unlike email/phone)
 CONFIG_OPT_MID = {
     "assistant": {"persona_name": "Aria"},
     "parameters": [
-        _param("full_name", "Full Name",     "name",  required=True,  order=1),
-        _param("company",   "Company Name",  "text",  required=False, order=2),
-        _param("email",     "Email Address", "email", required=True,  order=3),
+        _param("full_name",  "Full Name",  "name", required=True,  order=1),
+        _param("metlife_id", "MetLife ID", "text", required=False, order=2),
+        _param("email",      "Email Address", "email", required=True,  order=3),
     ],
 }
 
-# required → required → optional  (optional is at the end — never asked by design)
+# required → required → optional(metlife_id)  — trailing optional, natural ordering
+# This mirrors the real production scenario where an optional business field
+# (e.g. MetLife ID) is configured after all required fields.
 CONFIG_OPT_END = {
     "assistant": {"persona_name": "Aria"},
     "parameters": [
-        _param("first_name", "First Name",     "name",  required=True,  order=1),
-        _param("email",      "Email Address",  "email", required=True,  order=2),
-        _param("referral",   "Referral Source","text",  required=False, order=3),
+        _param("first_name",  "First Name",  "name", required=True,  order=1),
+        _param("email",       "Email Address", "email", required=True,  order=2),
+        _param("metlife_id",  "MetLife ID",  "text", required=False, order=3),
     ],
 }
 
@@ -138,16 +140,16 @@ def _field_mentioned_in_speaks(field_label: str, speaks: list[str]) -> bool:
 # ── Tests: optional field mid-sequence ───────────────────────────────────────
 
 class TestOptionalFieldMidSequence:
-    """Optional field (Company Name) sits between two required fields (Full Name, Email)."""
+    """Optional field (MetLife ID) sits between two required fields (Full Name, Email)."""
 
     def test_optional_mid_sequence_question_is_posed(self):
-        """Agent must ask for Company Name (optional) before moving to email."""
+        """Agent must ask for MetLife ID (optional) before moving to email."""
         collected, statuses, speaks = run_and_capture(
             [
                 "John Smith",
                 "yes",                    # confirm full_name
-                "Acme Corp",              # provide company when asked
-                "yes",                    # confirm company
+                "ABC123",                 # provide metlife_id when asked
+                "yes",                    # confirm metlife_id
                 "john@example.com",
                 "yes",
             ],
@@ -158,18 +160,18 @@ class TestOptionalFieldMidSequence:
         assert collected.get("email"), f"email missing: {collected}"
         assert AgentStatus.COMPLETED in statuses
 
-        assert _field_mentioned_in_speaks("company", speaks), (
-            "Expected agent to ask for 'Company Name' at some point. "
+        assert _field_mentioned_in_speaks("metlife", speaks), (
+            "Expected agent to ask for 'MetLife ID' at some point. "
             f"Speaks:\n" + "\n".join(f"  {s!r}" for s in speaks)
         )
 
     def test_optional_mid_sequence_collected_when_provided(self):
-        """When caller provides the optional company name, it must be collected."""
+        """When caller provides the optional MetLife ID, it must be collected."""
         collected, statuses, speaks = run_and_capture(
             [
                 "John Smith",
                 "yes",
-                "Acme Corp",
+                "ABC123",
                 "yes",
                 "john@example.com",
                 "yes",
@@ -177,28 +179,28 @@ class TestOptionalFieldMidSequence:
             CONFIG_OPT_MID,
             label="Optional mid-sequence — value provided and collected",
         )
-        assert collected.get("company") and collected["company"] != "", (
-            f"company should be collected with a real value when caller provides it. collected={collected}"
+        assert collected.get("metlife_id") and collected["metlife_id"] != "", (
+            f"metlife_id should be collected with a real value when caller provides it. collected={collected}"
         )
         assert collected.get("full_name")
         assert collected.get("email")
         assert AgentStatus.COMPLETED in statuses
 
     def test_skip_optional_moves_to_next_field_not_completion(self):
-        """Skipping the optional company must advance to email, not complete."""
+        """Skipping the optional MetLife ID must advance to email, not complete."""
         collected, statuses, speaks = run_and_capture(
             [
                 "John Smith",
                 "yes",                    # confirm full_name
-                "skip",                   # caller skips company
+                "skip",                   # caller skips metlife_id
                 "john@example.com",
                 "yes",
             ],
             CONFIG_OPT_MID,
             label="Optional skipped — next field (email) still collected",
         )
-        assert not (collected.get("company") and collected["company"] != ""), (
-            f"company must not have a real value after skip. collected={collected}"
+        assert not (collected.get("metlife_id") and collected["metlife_id"] != ""), (
+            f"metlife_id must not have a real value after skip. collected={collected}"
         )
         assert collected.get("full_name"), f"full_name missing: {collected}"
         assert collected.get("email"), (
@@ -228,28 +230,48 @@ class TestOptionalFieldMidSequence:
 # ── Tests: optional field at end ──────────────────────────────────────────────
 
 class TestOptionalFieldAtEnd:
-    """Optional field appears after all required fields — must NOT be asked."""
+    """Optional field (MetLife ID) appears after all required fields — must still be asked."""
 
-    def test_optional_at_end_not_collected(self):
-        """Once required fields are confirmed, agent completes without asking the optional."""
+    def test_optional_at_end_is_asked(self):
+        """After required fields are confirmed, agent must ask for the trailing optional."""
         collected, statuses, speaks = run_and_capture(
-            ["John", "yes", "john@example.com", "yes"],
+            ["John", "yes", "john@example.com", "yes", "ABC123", "yes"],
             CONFIG_OPT_END,
-            label="Optional at end — not asked, agent completes",
+            label="Optional at end — must be asked",
         )
         assert collected.get("first_name")
         assert collected.get("email")
-        assert not (collected.get("referral") and collected["referral"] != ""), (
-            f"referral (optional, end) must not be collected. collected={collected}"
+        assert AgentStatus.COMPLETED in statuses
+        assert _field_mentioned_in_speaks("metlife", speaks), (
+            "Expected agent to ask for 'MetLife ID' even though it trails required fields. "
+            f"Speaks:\n" + "\n".join(f"  {s!r}" for s in speaks)
         )
+
+    def test_optional_at_end_collected_when_provided(self):
+        """Trailing optional MetLife ID must be collected when caller provides it."""
+        collected, statuses, speaks = run_and_capture(
+            ["John", "yes", "john@example.com", "yes", "ABC123", "yes"],
+            CONFIG_OPT_END,
+            label="Optional at end — collected when provided",
+        )
+        assert collected.get("metlife_id") and collected["metlife_id"] != "", (
+            f"metlife_id must be collected when caller provides it. collected={collected}"
+        )
+        assert collected.get("first_name")
+        assert collected.get("email")
         assert AgentStatus.COMPLETED in statuses
 
-    def test_optional_at_end_agent_reaches_completed(self):
-        """Agent must reach COMPLETED without needing the optional field."""
-        _, statuses, _ = run_and_capture(
-            ["John", "yes", "john@example.com", "yes"],
+    def test_optional_at_end_skipped_still_completes(self):
+        """Caller can skip trailing optional — agent must still reach COMPLETED."""
+        collected, statuses, speaks = run_and_capture(
+            ["John", "yes", "john@example.com", "yes", "skip"],
             CONFIG_OPT_END,
-            label="Optional at end — COMPLETED reached",
+            label="Optional at end — skipped, still completes",
+        )
+        assert collected.get("first_name")
+        assert collected.get("email")
+        assert not (collected.get("metlife_id") and collected["metlife_id"] != ""), (
+            f"metlife_id must not be collected after skip. collected={collected}"
         )
         assert AgentStatus.COMPLETED in statuses
 

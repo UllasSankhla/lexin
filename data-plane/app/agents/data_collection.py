@@ -133,13 +133,7 @@ def _shape_matches_type(value: str, data_type: str) -> bool:
 
 
 # Deterministic opening questions per type — no LLM call needed for the first prompt
-_OPENING_QUESTIONS: dict[str, str] = {
-    "name":   "Could I start with your full name, please?",
-    "email":  "What's your email address? Feel free to spell it out.",
-    "phone":  "What's the best phone number to reach you? Please include the area code.",
-    "date":   "What date are we looking at?",
-    "number": "Could you provide that number for me?",
-}
+_OPENING_QUESTIONS: dict[str, str] = {}
 
 
 def _build_fields_block(parameters: list[dict]) -> str:
@@ -430,10 +424,10 @@ OPTIONAL FIELDS — CRITICAL RULES:
   and move to the NEXT uncollected field in order. Skip only the field the
   caller declined — do NOT skip subsequent optional fields automatically.
 - Required fields cannot be skipped regardless of what the caller says.
-- Once all required fields are confirmed AND pending_confirmation is null,
-  set status="completed" immediately — even if optional fields remain uncollected.
-  In that case speak a brief warm transition: "Perfect, I have what I need for now."
-  Do NOT continue asking for optional fields after required collection is complete.
+- Set status="completed" only when ALL fields in collection_order have been either
+  collected (confirmed) or explicitly skipped by the caller — regardless of whether
+  they are required or optional. Do not complete early just because required fields
+  are done; ask optional fields in their collection_order position too.
 
 CALLER UTTERANCE TAKES PRIORITY — always read the full utterance and extract
 any concrete field values present BEFORE deciding whether it is a yes/no response.
@@ -554,7 +548,7 @@ Return ONLY valid JSON matching this exact schema. No markdown. No explanation.
 Rules:
 - extracted contains only NEW values from this turn - never repeat confirmed fields
 - status is "waiting_confirm" whenever pending_confirmation is non-null
-- status is "completed" only when ALL required fields are confirmed AND pending_confirmation is null
+- status is "completed" only when ALL fields (required and optional) are confirmed or skipped AND pending_confirmation is null
 - speak is "" when cannot_process=true
 - pending_confirmation is ALWAYS preserved unchanged on unhandled responses
 - Queue only one pending_confirmation at a time; extras wait for the next turn
@@ -1050,7 +1044,7 @@ class DataCollectionAgent(AgentBase):
         remaining_all = [p for p in parameters if p["name"] not in collected]
         required_remaining = [p for p in remaining_all if p.get("required", True)]
 
-        if not required_remaining and not new_pending:
+        if not remaining_all and not new_pending:
             speak = result.speak or "Perfect, I have all the information I need."
             return SubagentResponse(
                 status=AgentStatus.COMPLETED,
@@ -1279,7 +1273,7 @@ class DataCollectionAgent(AgentBase):
 
         remaining_all = [p for p in parameters if p["name"] not in collected]
         required_remaining = [p for p in remaining_all if p.get("required", True)]
-        if not required_remaining and not new_pending:
+        if not remaining_all and not new_pending:
             # Split-brain guard: assert collected actually contains all required fields.
             # In _apply_confirm_yes this should always hold, but log loudly if not.
             required_names = {p["name"] for p in parameters if p.get("required", True)}
