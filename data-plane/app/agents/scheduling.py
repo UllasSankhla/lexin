@@ -4,12 +4,34 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from pydantic import BaseModel
+
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
 from app.agents.llm_utils import llm_structured_call, llm_text_call, ConversationHistory
 from app.agents.agent_schemas import SlotConfirmSignal, EventTypeMatch, SlotChoice, DateRangePreference
 from app.services.calendar_service import list_available_slots, book_time_slot
 
+
+class _NeedsAnswerSignal(BaseModel):
+    needs_answer: bool
+
 logger = logging.getLogger(__name__)
+
+_SCHEDULING_QUESTION_GATE_SYSTEM = (
+    "A caller is in the middle of booking an appointment with a law firm.\n"
+    "Determine whether the utterance requires a factual answer (something the "
+    "scheduling agent cannot provide), or is scheduling-domain content the agent "
+    "should handle (choosing a slot, confirming, requesting a different time).\n\n"
+    "needs_answer=true  — utterance is a question about the firm, fees, legal process,\n"
+    "                     documents, or anything outside picking/confirming a time slot.\n"
+    "needs_answer=false — utterance is about choosing or confirming a time slot,\n"
+    "                     requesting a different day/time, or confirming a booking.\n\n"
+    "true  → 'What are your fees?' | 'Where are you located?' | "
+    "'What should I bring?' | 'How long does a consultation last?'\n"
+    "false → 'The second one.' | 'Can we do Tuesday instead?' | "
+    "'Yes, confirm that.' | 'Do you have anything earlier?' | 'That works.'\n\n"
+    "Reply ONLY valid JSON: {\"needs_answer\": true} or {\"needs_answer\": false}."
+)
 
 _SPEAK_SLOTS_SYSTEM = (
     "Present available appointment slots to a caller over the phone. "
@@ -52,6 +74,8 @@ def _detect_confirmation(utterance: str, slot_desc: str = "") -> str:
 
 
 class SchedulingAgent(AgentBase):
+    is_primary_interactive = True
+
     """
     Internal state keys:
       stage: "presenting" | "awaiting_choice" | "awaiting_confirm" | "done"
@@ -72,7 +96,52 @@ class SchedulingAgent(AgentBase):
     ) -> SubagentResponse:
         stage = internal_state.get("stage", "presenting")
 
-        if stage == "presenting" or (stage == "presenting" and not utterance):
+        # ── Resume: re-surface pending state after an interrupt (utterance="") ──
+        if not utterance:
+            if stage == "awaiting_choice":
+                slots_data = internal_state.get("available_slots", [])
+                if slots_data:
+                    speak = self._speak_slots(slots_data)
+                    return SubagentResponse(
+                        status=AgentStatus.IN_PROGRESS,
+                        speak=speak,
+                        internal_state=internal_state,
+                    )
+            elif stage == "awaiting_confirm":
+                slots_data = internal_state.get("available_slots", [])
+                chosen_idx = internal_state.get("chosen_slot_id")
+                if slots_data and chosen_idx is not None and chosen_idx < len(slots_data):
+                    chosen = slots_data[chosen_idx]
+                    speak = (
+                        f"Just to confirm — I'll book you for {chosen['description']}. "
+                        "Shall I go ahead?"
+                    )
+                    return SubagentResponse(
+                        status=AgentStatus.WAITING_CONFIRM,
+                        speak=speak,
+                        pending_confirmation={"slot": chosen["description"]},
+                        internal_state=internal_state,
+                    )
+            # presenting or no slots yet — fall through to _present_slots
+            return self._present_slots(utterance, internal_state, config)
+
+        # ── Domain gate — return UNHANDLED for questions needing a factual answer ─
+        # Only gate during active choice/confirm stages — not during presenting,
+        # which runs once automatically before any caller input.
+        if stage in ("awaiting_choice", "awaiting_confirm"):
+            if self._needs_answer(utterance):
+                logger.info(
+                    "SchedulingAgent: UNHANDLED — utterance needs a factual answer "
+                    "| stage=%s | %r", stage, utterance[:80],
+                )
+                return SubagentResponse(
+                    status=AgentStatus.UNHANDLED,
+                    speak="",
+                    internal_state=internal_state,
+                    confidence=0.0,
+                )
+
+        if stage == "presenting":
             return self._present_slots(utterance, internal_state, config)
 
         if stage == "awaiting_choice":
@@ -474,3 +543,22 @@ class SchedulingAgent(AgentBase):
             )
 
         return None  # all clear — safe to book
+
+    def _needs_answer(self, utterance: str) -> bool:
+        """Return True if utterance requires a factual answer outside scheduling domain."""
+        try:
+            result = llm_structured_call(
+                _SCHEDULING_QUESTION_GATE_SYSTEM,
+                f"Caller said: \"{utterance}\"",
+                _NeedsAnswerSignal,
+                max_tokens=64,
+                tag="scheduling_question_gate",
+            )
+            logger.debug(
+                "SchedulingAgent: question_gate needs_answer=%s for %r",
+                result.needs_answer, utterance[:60],
+            )
+            return result.needs_answer
+        except Exception as exc:
+            logger.warning("SchedulingAgent: question gate failed: %s — defaulting to False", exc)
+            return False

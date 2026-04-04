@@ -198,15 +198,17 @@ def _invoke(
                 # the pending question and the graph is back in WAITING_CONFIRM.
                 # Without this the caller receives only the FAQ answer and "Yes" on
                 # the following turn is misread as a response to the FAQ.
-                if not re_fr and agent_id == "data_collection":
-                    dc_state = graph.states.get("data_collection")
-                    if dc_state and dc_state.internal_state.get("pending_confirmation"):
-                        dc_speak, dc_fr = _invoke(
-                            "data_collection", "", turn_idx, graph, registry,
+                # Generalised: re-invoke any is_primary_interactive agent with
+                # empty utterance after interrupt so it re-surfaces its pending state.
+                if not re_fr and getattr(registry.get(agent_id), "is_primary_interactive", False):
+                    primary_state = graph.states.get(agent_id)
+                    if primary_state and primary_state.status == AgentStatus.IN_PROGRESS:
+                        pri_speak, pri_fr = _invoke(
+                            agent_id, "", turn_idx, graph, registry,
                             planner, config, collected, call_history, chain_depth + 1,
                         )
-                        combined = (re_speak + " " + dc_speak).strip()
-                        return combined, dc_fr
+                        combined = (re_speak + " " + pri_speak).strip()
+                        return combined, pri_fr
                 return re_speak, re_fr
         return "", None
 

@@ -27,9 +27,15 @@ from __future__ import annotations
 import logging
 import random
 
+from pydantic import BaseModel
+
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
 from app.agents.llm_utils import llm_structured_call, ConversationHistory
 from app.agents.agent_schemas import DoneIntentSignal
+
+
+class _NeedsAnswerSignal(BaseModel):
+    needs_answer: bool
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,23 @@ _FILLERS = [
     "Okay, continue.",
 ]
 
+_QUESTION_GATE_SYSTEM = (
+    "A caller is describing their legal matter to a law firm receptionist.\n"
+    "Determine whether the utterance requires a factual answer, or is narrative "
+    "content the agent should accumulate.\n\n"
+    "needs_answer=true  — utterance is primarily a question seeking information,\n"
+    "                     regardless of topic (fees, process, legal, anything).\n"
+    "needs_answer=false — utterance is a narrative statement, story continuation,\n"
+    "                     or a rhetorical remark embedded in narrative\n"
+    "                     ('can you help?', 'does that make sense?',\n"
+    "                      'is this something you handle?', 'am I in the right place?').\n\n"
+    "true  → 'What are your fees?' | 'How long does this take?' | "
+    "'Do I need to bring documents?' | 'What happens after this?'\n"
+    "false → 'I was in an accident last month.' | 'My employer fired me, can you help?' "
+    "| 'I need help with a divorce.' | 'I think I was wrongfully terminated.'\n\n"
+    "Reply ONLY valid JSON: {\"needs_answer\": true} or {\"needs_answer\": false}."
+)
+
 _DONE_INTENT_SYSTEM = (
     "The caller was asked: 'Is there anything else you would like to add about your matter?'\n"
     "Determine whether they want to STOP (nothing more to add) or CONTINUE (have more to say).\n\n"
@@ -64,6 +87,8 @@ _DONE_INTENT_SYSTEM = (
 
 
 class NarrativeCollectionAgent(AgentBase):
+    is_primary_interactive = True
+
     """
     Collects a free-form caller narrative over multiple STT turns.
 
@@ -119,6 +144,24 @@ class NarrativeCollectionAgent(AgentBase):
                 speak=prompt,
                 internal_state=internal_state,
                 confidence=0.9,
+            )
+
+        # ── Domain gate — return UNHANDLED for questions needing a factual answer ─
+        # State is NOT modified before this check (Principle 2).
+        # The planner usually routes questions away from NC, but misclassifications
+        # and multi-intent utterances can still land here.  UNHANDLED triggers the
+        # faq → context_docs → fallback chain; after it completes, on_complete=resume
+        # re-invokes NC with utterance="" so the narrative continues uninterrupted.
+        if self._needs_answer(utterance, llm_history):
+            logger.info(
+                "NarrativeCollection: UNHANDLED — utterance needs a factual answer | %r",
+                utterance[:80],
+            )
+            return SubagentResponse(
+                status=AgentStatus.UNHANDLED,
+                speak="",
+                internal_state=internal_state,
+                confidence=0.0,
             )
 
         # ── Stage: asking_done — one response, then always complete ────────
@@ -195,6 +238,29 @@ class NarrativeCollectionAgent(AgentBase):
         """At least _MIN_SEGMENTS segments with enough words each."""
         meaningful = [s for s in segments if len(s.split()) >= _MIN_WORDS_IN_SEGMENT]
         return len(meaningful) >= _MIN_SEGMENTS
+
+    def _needs_answer(self, utterance: str, history: ConversationHistory) -> bool:
+        """Return True if the utterance is primarily a question requiring a factual
+        answer rather than narrative content to accumulate."""
+        try:
+            result = llm_structured_call(
+                _QUESTION_GATE_SYSTEM,
+                f"Caller said: \"{utterance}\"",
+                _NeedsAnswerSignal,
+                max_tokens=64,
+                history=history,
+                tag="narrative_question_gate",
+            )
+            logger.debug(
+                "NarrativeCollection: question_gate needs_answer=%s for %r",
+                result.needs_answer, utterance[:60],
+            )
+            return result.needs_answer
+        except Exception as exc:
+            logger.warning("NarrativeCollection: question gate failed: %s — defaulting to False", exc)
+            # Default to False (treat as narrative) so a gate failure never
+            # silently swallows a legitimate narrative utterance.
+            return False
 
     def _detect_done_intent(self, utterance: str, history: ConversationHistory) -> bool:
         """Return True if the caller indicates they have nothing more to add."""

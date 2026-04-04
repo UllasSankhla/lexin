@@ -37,6 +37,11 @@ class SubagentResponse:
 
 
 class AgentBase(ABC):
+    # Set to True on primary interactive agents (DataCollection, NarrativeCollection,
+    # Scheduling).  One-shot agents (Empathy, IntakeQualification, FAQ, Fallback,
+    # Farewell) leave this False — the framework contract does not apply to them.
+    is_primary_interactive: bool = False
+
     @abstractmethod
     def process(
         self,
@@ -45,5 +50,15 @@ class AgentBase(ABC):
         config: dict,
         history: list[dict],
     ) -> SubagentResponse:
-        """Process one caller utterance. All args are read-only except internal_state."""
+        """Process one caller utterance.
+
+        Primary interactive agent contract (is_primary_interactive=True):
+        1. Domain gate — if utterance is outside this agent's domain, return
+           SubagentResponse(status=UNHANDLED) with internal_state UNCHANGED.
+        2. State immutability on UNHANDLED — never mutate internal_state before
+           the domain gate decision.
+        3. Resume speak — when utterance is "" (resume after interrupt), re-surface
+           whatever the agent was waiting for (pending confirmation, next question,
+           etc.) so the caller knows where to pick up.
+        """
         ...

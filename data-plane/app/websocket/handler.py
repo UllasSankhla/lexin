@@ -299,19 +299,20 @@ async def handle_call(
             re_speak, finalize_reason, re_conf = await _invoke_and_follow(
                 re_agent_id, utterance, current_turn, loop, call_history, chain_depth + 1
             )
-            # If the interrupted agent was data_collection with a pending
-            # confirmation, re-invoke it with an empty utterance so it re-surfaces
-            # the pending question and the graph is back in WAITING_CONFIRM.
-            # Without this the caller receives only the FAQ answer and "Yes" on
-            # the following turn is misread as a response to the FAQ.
-            if not finalize_reason and agent_id == "data_collection":
-                dc_state = graph.states.get("data_collection")
-                if dc_state and dc_state.internal_state.get("pending_confirmation"):
-                    dc_speak, dc_fr, dc_conf = await _invoke_and_follow(
-                        "data_collection", "", current_turn, loop, call_history, chain_depth + 1
+            # After the interrupt agent finishes, re-invoke the interrupted primary
+            # agent with utterance="" so it re-surfaces its pending state (pending
+            # confirmation question, slot choice, narrative prompt, etc.).
+            # Without this the caller receives only the interrupt answer and the
+            # next utterance ("Yes") is misread as a response to the interrupt.
+            # Applies to all is_primary_interactive agents, not just data_collection.
+            if not finalize_reason and registry.get(agent_id) and getattr(registry[agent_id], "is_primary_interactive", False):
+                primary_state = graph.states.get(agent_id)
+                if primary_state and primary_state.status == AgentStatus.IN_PROGRESS:
+                    pri_speak, pri_fr, pri_conf = await _invoke_and_follow(
+                        agent_id, "", current_turn, loop, call_history, chain_depth + 1
                     )
-                    combined = (re_speak + " " + dc_speak).strip()
-                    return combined, dc_fr, dc_conf
+                    combined = (re_speak + " " + pri_speak).strip()
+                    return combined, pri_fr, pri_conf
             return re_speak, finalize_reason, re_conf
         # ── End UNHANDLED handling ─────────────────────────────────────────────
 

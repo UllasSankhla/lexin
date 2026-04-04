@@ -616,6 +616,8 @@ def _format_call_transcript(history: list[dict]) -> str:
 
 
 class DataCollectionAgent(AgentBase):
+    is_primary_interactive = True
+
     """
     Collects required parameters using a single mega-prompt per turn.
 
