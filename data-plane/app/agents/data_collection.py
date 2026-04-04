@@ -166,10 +166,11 @@ def _build_intake_flow_block(parameters: list[dict]) -> str:
     sorted_params = sorted(parameters, key=lambda x: x.get("collection_order", 999))
     lines = [
         "Collect the following fields in this exact order.",
-        "Confirm each one before moving to the next. Required fields cannot be skipped.",
+        "Confirm each one before moving to the next.",
+        "Required fields cannot be skipped. Optional fields may be skipped only if the caller explicitly declines.",
     ]
     for i, p in enumerate(sorted_params, 1):
-        req = "required" if p.get("required", True) else "optional — skip if caller declines"
+        req = "required" if p.get("required", True) else "optional"
         lines.append(f"  {i}. {p['display_label']} ({req})")
     return "\n".join(lines)
 
@@ -408,24 +409,27 @@ AFTER the confirmation is received.
          a MetLife ID?" ← two questions; the caller's yes/no becomes ambiguous
 
 After a confirmation is resolved (yes/no/correction), if there are still
-uncollected REQUIRED fields, your speak MUST seamlessly continue to the next
-required field in the same sentence. Never end a turn with a bare acknowledgment
-when required fields remain.
+uncollected fields, your speak MUST seamlessly continue to the next uncollected
+field in collection order. Never end a turn with a bare acknowledgment when
+fields remain.
 
   GOOD: "Great, and what's the best number to reach you?"
   BAD:  "Thank you." — leaves the caller with nothing to do
 
 The speak for a resolved confirmation is always:
-  <brief acknowledgment> + <question for next uncollected REQUIRED field>
+  <brief acknowledgment> + <question for the next uncollected field in order>
+
+This includes optional fields — if the next field in collection order is optional,
+ask for it just as you would a required field. Do not skip it.
 
 OPTIONAL FIELDS — CRITICAL RULES:
-- When asking for an optional field, always state that it is optional and give
-  the caller a clear choice:
-    GOOD: "We also collect a physical address — that's completely optional.
-           Would you like to provide it, or shall we move on?"
-    BAD:  "And what is your physical address?" — gives no indication it can be skipped
-- If the caller declines an optional field (e.g. "I'll skip that", "not right now",
-  "no thanks"), do NOT ask for the next optional field.
+- Ask for optional fields in collection order, the same way you ask for required
+  fields. Do NOT label them as optional or offer to skip proactively.
+- If the caller explicitly declines or skips an optional field (e.g. "skip",
+  "I don't have one", "no thanks", "pass"), accept it, record it as skipped,
+  and move to the NEXT uncollected field in order. Skip only the field the
+  caller declined — do NOT skip subsequent optional fields automatically.
+- Required fields cannot be skipped regardless of what the caller says.
 - Once all required fields are confirmed AND pending_confirmation is null,
   set status="completed" immediately — even if optional fields remain uncollected.
   In that case speak a brief warm transition: "Perfect, I have what I need for now."
