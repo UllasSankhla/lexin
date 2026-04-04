@@ -7,6 +7,7 @@ three core paths:
   - data_collection   — collect first name, last name, email (confirm each)
   - narrative_collection — caller describes their matter across multiple turns
   - scheduling        — present slots, caller picks, confirms (no Calendly call)
+  - faq               — single question, multi-question, and legal-deflect turns
 
 Also benchmarks the Planner independently, since it is an LLM call that runs
 before every agent invocation in the real pipeline.
@@ -26,9 +27,15 @@ Output:
 Usage:
   cd data-plane
   PYTHONPATH=. python3 benchmarks/latency_benchmark.py
-  PYTHONPATH=. python3 benchmarks/latency_benchmark.py --runs 5
+  PYTHONPATH=. python3 benchmarks/latency_benchmark.py --runs 10 --warmup 3
+  PYTHONPATH=. python3 benchmarks/latency_benchmark.py --runs 5 --warmup 0
   PYTHONPATH=. python3 benchmarks/latency_benchmark.py --scenario data_collection
+  PYTHONPATH=. python3 benchmarks/latency_benchmark.py --scenario faq
   PYTHONPATH=. python3 benchmarks/latency_benchmark.py --scenario planner
+
+The default --warmup 3 discards the first 3 runs so that the Cerebras KV cache
+is populated for the static system prompt before measurements begin. Only the
+user-data portion of the context is cold on measured runs.
 """
 from __future__ import annotations
 
@@ -42,9 +49,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from app.agents.data_collection import DataCollectionAgent
+from app.agents.faq import FAQAgent
 from app.agents.narrative_collection import NarrativeCollectionAgent
 from app.agents.scheduling import SchedulingAgent
 from app.agents.planner import Planner
@@ -88,6 +96,46 @@ _SCHED_CONFIG: dict = {
     "_collected": {"first_name": "John", "last_name": "Smith", "email_address": "john@example.com"},
     "_workflow_stages": "Schedule the caller's appointment.",
     "_booking": {}, "_notes": "", "_tool_results": {},
+}
+
+_FAQ_CONFIG: dict = {
+    "assistant": {"persona_name": "Aria"},
+    "parameters": [],
+    "context_files": [], "practice_areas": [], "global_policy_documents": [],
+    "_collected": {}, "_workflow_stages": "", "_booking": {}, "_notes": "", "_tool_results": {},
+    "faqs": [
+        {
+            "question": "Do you charge for the initial consultation?",
+            "answer": "No, the initial consultation is completely free of charge.",
+        },
+        {
+            "question": "What are your office hours?",
+            "answer": "We are open Monday through Friday, 9 AM to 6 PM Pacific Time.",
+        },
+        {
+            "question": "What types of cases do you handle?",
+            "answer": (
+                "We handle personal injury cases including car accidents, slip and fall, "
+                "and wrongful death, as well as employment law matters such as wrongful "
+                "termination, workplace discrimination, and unpaid wages."
+            ),
+        },
+        {
+            "question": "How do your fees work?",
+            "answer": (
+                "We work on a contingency fee basis — you pay nothing unless we win. "
+                "Our fee is typically 33% of the settlement before litigation "
+                "and 40% if a lawsuit is filed."
+            ),
+        },
+        {
+            "question": "How long does a personal injury case usually take?",
+            "answer": (
+                "Most personal injury cases settle within 6 to 18 months. "
+                "Cases that proceed to trial may take 2 to 3 years."
+            ),
+        },
+    ],
 }
 
 _PLANNER_CONFIG: dict = {
@@ -142,6 +190,21 @@ SCENARIOS: dict[str, dict] = {
             "I had whiplash and a broken arm. I was in the hospital for two days.",
             "I've missed three weeks of work and I have medical bills totaling over fifty thousand dollars.",
             "No, I think that covers everything.",
+        ],
+    },
+    "faq": {
+        "description": "Single FAQ question, multi-question turn, and a legal-deflect question",
+        "agent_class": FAQAgent,
+        "config_template": "_FAQ_CONFIG",
+        "turns": [
+            # T1: single question — matches one FAQ → faq_multi_match + faq_answer
+            "Do you charge for consultations?",
+            # T2: two questions in one utterance → faq_multi_match + faq_answer (combined)
+            "What are your office hours and how do your fees work?",
+            # T3: legal question — classified as is_legal → faq_multi_match only (deflect, no faq_answer)
+            "Do you think I have a strong case given that the other driver ran the light?",
+            # T4: mixed — one answerable FAQ + one legal question → both calls
+            "How long do cases typically take, and should I file before the deadline?",
         ],
     },
     "scheduling": {
@@ -244,6 +307,9 @@ def _run_agent_scenario(scenario_name: str, run_idx: int) -> ScenarioRun:
     elif scenario_name == "narrative_collection":
         config = copy.deepcopy(_NARR_CONFIG)
         extra_patches = []
+    elif scenario_name == "faq":
+        config = copy.deepcopy(_FAQ_CONFIG)
+        extra_patches = []
     else:  # scheduling
         config = copy.deepcopy(_SCHED_CONFIG)
         config["_tool_results"] = {"prefetched_slots": _make_fake_slots()}
@@ -304,7 +370,8 @@ def _run_agent_scenario(scenario_name: str, run_idx: int) -> ScenarioRun:
                 status    = status,
             ))
 
-            if resp is not None and resp.status == AgentStatus.COMPLETED:
+            # FAQ is a one-shot handler (always COMPLETED) — keep going through all turns
+            if resp is not None and resp.status == AgentStatus.COMPLETED and scenario_name != "faq":
                 break   # scenario finished early — that's fine
 
     return ScenarioRun(run_idx, results)
@@ -381,7 +448,11 @@ def aggregate(all_runs: dict[str, list[ScenarioRun]]) -> dict[str, Any]:
         turn_llm:      dict[int, list[float]] = {}
         turn_overhead: dict[int, list[float]] = {}
         turn_n_calls:  dict[int, list[int]]   = {}
-        llm_by_tag:    dict[str, list[float]] = {}
+        # per-tag: latency, input tokens, output tokens, output throughput (tok/s)
+        tag_latency:    dict[str, list[float]] = {}
+        tag_in_tokens:  dict[str, list[int]]   = {}
+        tag_out_tokens: dict[str, list[int]]   = {}
+        tag_throughput: dict[str, list[float]] = {}  # output tok/s
         wall_totals:   list[float] = []
         llm_totals:    list[float] = []
 
@@ -394,7 +465,14 @@ def aggregate(all_runs: dict[str, list[ScenarioRun]]) -> dict[str, Any]:
                 turn_overhead.setdefault(t.turn_idx, []).append(t.overhead_ms)
                 turn_n_calls.setdefault(t.turn_idx, []).append(t.llm_call_count)
                 for call in t.llm_calls:
-                    llm_by_tag.setdefault(call["tag"], []).append(call["latency_ms"])
+                    tag = call["tag"]
+                    lat = call["latency_ms"]
+                    out = call["output_tokens"]
+                    tag_latency.setdefault(tag, []).append(lat)
+                    tag_in_tokens.setdefault(tag, []).append(call["input_tokens"])
+                    tag_out_tokens.setdefault(tag, []).append(out)
+                    if lat > 0:
+                        tag_throughput.setdefault(tag, []).append(out / (lat / 1000))
 
         report[scenario_name] = {
             "description":             scenario_desc,
@@ -412,8 +490,13 @@ def aggregate(all_runs: dict[str, list[ScenarioRun]]) -> dict[str, Any]:
                 for idx in sorted(turn_wall.keys())
             },
             "llm_calls_by_tag": {
-                tag: _stats(vals)
-                for tag, vals in sorted(llm_by_tag.items())
+                tag: {
+                    "latency_ms":       _stats(tag_latency[tag]),
+                    "input_tokens":     _stats([float(x) for x in tag_in_tokens[tag]]),
+                    "output_tokens":    _stats([float(x) for x in tag_out_tokens[tag]]),
+                    "throughput_tok_s": _stats(tag_throughput.get(tag, [])),
+                }
+                for tag in sorted(tag_latency.keys())
             },
         }
 
@@ -545,18 +628,26 @@ def print_summary(report: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM latency benchmark for the voice AI pipeline")
     parser.add_argument("--runs",     type=int, default=10,
-                        help="Number of runs per scenario (default: 10)")
+                        help="Number of measured runs per scenario (default: 10)")
+    parser.add_argument("--warmup",   type=int, default=3,
+                        help="Warmup runs to discard before measuring (default: 3). "
+                             "Allows Cerebras to populate the KV cache for the static "
+                             "system prompt so only the user-data portion is cold.")
     parser.add_argument("--scenario", type=str, choices=list(SCENARIOS.keys()),
                         help="Run only this scenario (default: all)")
     args = parser.parse_args()
 
     scenarios_to_run = [args.scenario] if args.scenario else list(SCENARIOS.keys())
-    n_runs = args.runs
+    n_runs   = args.runs
+    n_warmup = args.warmup
+    total    = n_warmup + n_runs
 
     print(f"\nLLM Latency Benchmark")
     print(f"  Model:     {settings.cerebras_model}")
     print(f"  Scenarios: {', '.join(scenarios_to_run)}")
-    print(f"  Runs:      {n_runs}")
+    print(f"  Warmup:    {n_warmup} runs (discarded — KV cache fill)")
+    print(f"  Measured:  {n_runs} runs")
+    print(f"  Total:     {total} runs per scenario")
     print()
 
     all_runs: dict[str, list[ScenarioRun]] = {s: [] for s in scenarios_to_run}
@@ -564,19 +655,25 @@ def main() -> None:
     for scenario in scenarios_to_run:
         turns_n = len(SCENARIOS[scenario]["turns"])
         print(f"{'═' * 60}")
-        print(f"  {scenario}  ({turns_n} turns × {n_runs} runs)")
+        print(f"  {scenario}  ({turns_n} turns × {total} runs, {n_warmup} warmup)")
         print(f"{'─' * 60}")
 
-        for run_idx in range(1, n_runs + 1):
-            print(f"  run {run_idx:2d}/{n_runs} ...", end="", flush=True)
+        for run_idx in range(1, total + 1):
+            is_warmup = run_idx <= n_warmup
+            label = f"warmup {run_idx:2d}/{n_warmup}" if is_warmup else f"run {run_idx - n_warmup:2d}/{n_runs}"
+            print(f"  {label} ...", end="", flush=True)
+
             run = _run_scenario(scenario, run_idx)
-            all_runs[scenario].append(run)
 
             turn_tags = "  ".join(
                 f"T{t.turn_idx}:{t.wall_ms:.0f}ms[{t.llm_call_count}LLM]"
                 for t in run.turns
             )
-            print(f"  {run.total_wall_ms:.0f}ms  ↳ {turn_tags}")
+            suffix = "  [discarded]" if is_warmup else ""
+            print(f"  {run.total_wall_ms:.0f}ms  ↳ {turn_tags}{suffix}")
+
+            if not is_warmup:
+                all_runs[scenario].append(run)
 
         print()
 

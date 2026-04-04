@@ -1,0 +1,77 @@
+{
+  "faq": {
+    "description": "Single FAQ question, multi-question turn, and a legal-deflect question",
+    "runs": 1,
+    "scenario_total_wall_ms": {
+      "avg": 2394.7,
+      "median": 2394.7,
+      "p99": 2394.7,
+      "max": 2394.7,
+      "min": 2394.7,
+      "n": 1
+    },
+    "scenario_total_llm_ms": {
+      "avg": 2394.6,
+      "median": 2394.6,
+      "p99": 2394.6,
+      "max": 2394.6,
+      "min": 2394.6,
+      "n": 1
+    },
+    "turns": {
+      "1": {
+        "utterance": "Do you charge for consultations?",
+        "wall_ms": {
+          "avg": 2394.7,
+          "median": 2394.7,
+          "p99": 2394.7,
+          "max": 2394.7,
+          "min": 2394.7,
+          "n": 1
+        },
+        "llm_ms": {
+          "avg": 2394.6,
+          "median": 2394.6,
+          "p99": 2394.6,
+          "max": 2394.6,
+          "min": 2394.6,
+          "n": 1
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.1,
+          "n": 1
+        },
+        "llm_calls": {
+          "avg": 2.0,
+          "median": 2.0,
+          "p99": 2.0,
+          "max": 2.0,
+          "min": 2.0,
+          "n": 1
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "faq_answer": {
+        "avg": 172.4,
+        "median": 172.4,
+        "p99": 172.4,
+        "max": 172.4,
+        "min": 172.4,
+        "n": 1
+      },
+      "faq_multi_match": {
+        "avg": 2222.2,
+        "median": 2222.2,
+        "p99": 2222.2,
+        "max": 2222.2,
+        "min": 2222.2,
+        "n": 1
+      }
+    }
+  }
+}

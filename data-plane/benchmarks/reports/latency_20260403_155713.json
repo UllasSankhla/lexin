@@ -1,0 +1,937 @@
+{
+  "data_collection": {
+    "description": "Collect first name, last name, and email \u2014 confirm each field",
+    "runs": 10,
+    "scenario_total_wall_ms": {
+      "avg": 1952.6,
+      "median": 1806.4,
+      "p99": 2901.4,
+      "max": 2901.4,
+      "min": 1133.8,
+      "n": 10
+    },
+    "scenario_total_llm_ms": {
+      "avg": 1952.1,
+      "median": 1805.9,
+      "p99": 2900.5,
+      "max": 2900.5,
+      "min": 1133.1,
+      "n": 10
+    },
+    "turns": {
+      "1": {
+        "utterance": "My name is John Smith.",
+        "wall_ms": {
+          "avg": 520.7,
+          "median": 294.4,
+          "p99": 2064.9,
+          "max": 2064.9,
+          "min": 263.7,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 520.6,
+          "median": 294.2,
+          "p99": 2064.7,
+          "max": 2064.7,
+          "min": 263.6,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "2": {
+        "utterance": "Yes, that's correct.",
+        "wall_ms": {
+          "avg": 231.5,
+          "median": 209.9,
+          "p99": 361.0,
+          "max": 361.0,
+          "min": 168.8,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 231.4,
+          "median": 209.8,
+          "p99": 360.9,
+          "max": 360.9,
+          "min": 168.7,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "3": {
+        "utterance": "Yes.",
+        "wall_ms": {
+          "avg": 295.1,
+          "median": 286.4,
+          "p99": 496.8,
+          "max": 496.8,
+          "min": 169.3,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 295.0,
+          "median": 286.2,
+          "p99": 496.7,
+          "max": 496.7,
+          "min": 169.2,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "4": {
+        "utterance": "My email is john dot smith at example dot com.",
+        "wall_ms": {
+          "avg": 442.3,
+          "median": 342.2,
+          "p99": 966.0,
+          "max": 966.0,
+          "min": 262.0,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 442.2,
+          "median": 342.1,
+          "p99": 965.8,
+          "max": 965.8,
+          "min": 261.8,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.2,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "5": {
+        "utterance": "Yes, that's right.",
+        "wall_ms": {
+          "avg": 383.3,
+          "median": 241.5,
+          "p99": 895.9,
+          "max": 895.9,
+          "min": 167.9,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 383.2,
+          "median": 241.4,
+          "p99": 895.9,
+          "max": 895.9,
+          "min": 167.8,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "6": {
+        "utterance": "Confirmed.",
+        "wall_ms": {
+          "avg": 398.9,
+          "median": 398.9,
+          "p99": 434.8,
+          "max": 434.8,
+          "min": 362.9,
+          "n": 2
+        },
+        "llm_ms": {
+          "avg": 398.7,
+          "median": 398.7,
+          "p99": 434.6,
+          "max": 434.6,
+          "min": 362.8,
+          "n": 2
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 2
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 2
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "dc_confirm_classify": {
+        "avg": 302.4,
+        "median": 211.8,
+        "p99": 895.9,
+        "max": 895.9,
+        "min": 167.8,
+        "n": 28
+      },
+      "dc_extract": {
+        "avg": 460.6,
+        "median": 309.4,
+        "p99": 2064.7,
+        "max": 2064.7,
+        "min": 261.8,
+        "n": 24
+      }
+    }
+  },
+  "narrative_collection": {
+    "description": "Caller describes their legal matter across multiple turns",
+    "runs": 10,
+    "scenario_total_wall_ms": {
+      "avg": 707.1,
+      "median": 233.3,
+      "p99": 4791.9,
+      "max": 4791.9,
+      "min": 163.0,
+      "n": 10
+    },
+    "scenario_total_llm_ms": {
+      "avg": 707.0,
+      "median": 233.2,
+      "p99": 4791.8,
+      "max": 4791.8,
+      "min": 163.0,
+      "n": 10
+    },
+    "turns": {
+      "1": {
+        "utterance": "I was in a car accident on January 15th. A truck ran a red l",
+        "wall_ms": {
+          "avg": 0.0,
+          "median": 0.0,
+          "p99": 0.0,
+          "max": 0.0,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 0,
+          "median": 0.0,
+          "p99": 0,
+          "max": 0,
+          "min": 0,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.0,
+          "median": 0.0,
+          "p99": 0.0,
+          "max": 0.0,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 0.0,
+          "median": 0.0,
+          "p99": 0.0,
+          "max": 0.0,
+          "min": 0.0,
+          "n": 10
+        }
+      },
+      "2": {
+        "utterance": "I had whiplash and a broken arm. I was in the hospital for t",
+        "wall_ms": {
+          "avg": 707.1,
+          "median": 233.3,
+          "p99": 4791.9,
+          "max": 4791.9,
+          "min": 163.0,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 707.0,
+          "median": 233.2,
+          "p99": 4791.8,
+          "max": 4791.8,
+          "min": 163.0,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "narrative_done_intent": {
+        "avg": 707.0,
+        "median": 233.2,
+        "p99": 4791.8,
+        "max": 4791.8,
+        "min": 163.0,
+        "n": 10
+      }
+    }
+  },
+  "faq": {
+    "description": "Single FAQ question, multi-question turn, and a legal-deflect question",
+    "runs": 10,
+    "scenario_total_wall_ms": {
+      "avg": 1399.0,
+      "median": 1373.9,
+      "p99": 1684.6,
+      "max": 1684.6,
+      "min": 1246.5,
+      "n": 10
+    },
+    "scenario_total_llm_ms": {
+      "avg": 1398.6,
+      "median": 1373.4,
+      "p99": 1684.1,
+      "max": 1684.1,
+      "min": 1246.1,
+      "n": 10
+    },
+    "turns": {
+      "1": {
+        "utterance": "Do you charge for consultations?",
+        "wall_ms": {
+          "avg": 362.1,
+          "median": 353.7,
+          "p99": 438.3,
+          "max": 438.3,
+          "min": 315.2,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 362.0,
+          "median": 353.6,
+          "p99": 438.2,
+          "max": 438.2,
+          "min": 315.1,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 2.0,
+          "median": 2.0,
+          "p99": 2.0,
+          "max": 2.0,
+          "min": 2.0,
+          "n": 10
+        }
+      },
+      "2": {
+        "utterance": "What are your office hours and how do your fees work?",
+        "wall_ms": {
+          "avg": 389.6,
+          "median": 374.6,
+          "p99": 511.5,
+          "max": 511.5,
+          "min": 344.1,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 389.5,
+          "median": 374.4,
+          "p99": 511.4,
+          "max": 511.4,
+          "min": 344.0,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 2.0,
+          "median": 2.0,
+          "p99": 2.0,
+          "max": 2.0,
+          "min": 2.0,
+          "n": 10
+        }
+      },
+      "3": {
+        "utterance": "Do you think I have a strong case given that the other drive",
+        "wall_ms": {
+          "avg": 214.7,
+          "median": 185.9,
+          "p99": 391.1,
+          "max": 391.1,
+          "min": 166.6,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 214.6,
+          "median": 185.8,
+          "p99": 391.0,
+          "max": 391.0,
+          "min": 166.5,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "4": {
+        "utterance": "How long do cases typically take, and should I file before t",
+        "wall_ms": {
+          "avg": 432.6,
+          "median": 396.4,
+          "p99": 648.4,
+          "max": 648.4,
+          "min": 349.9,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 432.5,
+          "median": 396.1,
+          "p99": 648.3,
+          "max": 648.3,
+          "min": 349.7,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 2.0,
+          "median": 2.0,
+          "p99": 2.0,
+          "max": 2.0,
+          "min": 2.0,
+          "n": 10
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "faq_answer": {
+        "avg": 187.2,
+        "median": 172.2,
+        "p99": 342.1,
+        "max": 342.1,
+        "min": 135.4,
+        "n": 30
+      },
+      "faq_multi_match": {
+        "avg": 209.3,
+        "median": 200.4,
+        "p99": 391.0,
+        "max": 391.0,
+        "min": 166.5,
+        "n": 40
+      }
+    }
+  },
+  "scheduling": {
+    "description": "Present available slots, caller picks one, confirms (no Calendly API call)",
+    "runs": 10,
+    "scenario_total_wall_ms": {
+      "avg": 758.4,
+      "median": 722.9,
+      "p99": 1025.7,
+      "max": 1025.7,
+      "min": 626.4,
+      "n": 10
+    },
+    "scenario_total_llm_ms": {
+      "avg": 758.1,
+      "median": 722.6,
+      "p99": 1025.3,
+      "max": 1025.3,
+      "min": 626.2,
+      "n": 10
+    },
+    "turns": {
+      "1": {
+        "utterance": "",
+        "wall_ms": {
+          "avg": 179.3,
+          "median": 180.4,
+          "p99": 214.4,
+          "max": 214.4,
+          "min": 148.9,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 179.2,
+          "median": 180.4,
+          "p99": 214.3,
+          "max": 214.3,
+          "min": 148.9,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "2": {
+        "utterance": "Option one please.",
+        "wall_ms": {
+          "avg": 389.4,
+          "median": 364.6,
+          "p99": 668.9,
+          "max": 668.9,
+          "min": 287.9,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 389.3,
+          "median": 364.4,
+          "p99": 668.7,
+          "max": 668.7,
+          "min": 287.7,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 2.0,
+          "median": 2.0,
+          "p99": 2.0,
+          "max": 2.0,
+          "min": 2.0,
+          "n": 10
+        }
+      },
+      "3": {
+        "utterance": "Yes, that works.",
+        "wall_ms": {
+          "avg": 189.7,
+          "median": 185.1,
+          "p99": 227.9,
+          "max": 227.9,
+          "min": 163.2,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 189.6,
+          "median": 185.1,
+          "p99": 227.8,
+          "max": 227.8,
+          "min": 163.1,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.1,
+          "max": 0.1,
+          "min": 0.0,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "scheduling_confirm_intent": {
+        "avg": 189.6,
+        "median": 185.1,
+        "p99": 227.8,
+        "max": 227.8,
+        "min": 163.1,
+        "n": 10
+      },
+      "scheduling_slot_choice": {
+        "avg": 194.8,
+        "median": 182.2,
+        "p99": 303.9,
+        "max": 303.9,
+        "min": 161.3,
+        "n": 10
+      },
+      "scheduling_slot_confirm_speak": {
+        "avg": 194.5,
+        "median": 169.4,
+        "p99": 482.9,
+        "max": 482.9,
+        "min": 126.4,
+        "n": 10
+      },
+      "scheduling_slots_speak": {
+        "avg": 179.2,
+        "median": 180.4,
+        "p99": 214.3,
+        "max": 214.3,
+        "min": 148.9,
+        "n": 10
+      }
+    }
+  },
+  "planner": {
+    "description": "Planner LLM call latency across representative utterances",
+    "runs": 10,
+    "scenario_total_wall_ms": {
+      "avg": 2787.0,
+      "median": 2372.5,
+      "p99": 5895.0,
+      "max": 5895.0,
+      "min": 2085.5,
+      "n": 10
+    },
+    "scenario_total_llm_ms": {
+      "avg": 2786.1,
+      "median": 2371.6,
+      "p99": 5894.1,
+      "max": 5894.1,
+      "min": 2084.3,
+      "n": 10
+    },
+    "turns": {
+      "1": {
+        "utterance": "My name is John Smith.",
+        "wall_ms": {
+          "avg": 315.0,
+          "median": 281.8,
+          "p99": 595.7,
+          "max": 595.7,
+          "min": 252.1,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 314.8,
+          "median": 281.6,
+          "p99": 595.5,
+          "max": 595.5,
+          "min": 252.0,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.2,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "2": {
+        "utterance": "Yes, that's right.",
+        "wall_ms": {
+          "avg": 416.8,
+          "median": 383.6,
+          "p99": 573.4,
+          "max": 573.4,
+          "min": 286.4,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 416.6,
+          "median": 383.5,
+          "p99": 573.3,
+          "max": 573.3,
+          "min": 286.3,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.2,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "3": {
+        "utterance": "I was in a car accident.",
+        "wall_ms": {
+          "avg": 335.0,
+          "median": 314.4,
+          "p99": 475.5,
+          "max": 475.5,
+          "min": 255.4,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 334.9,
+          "median": 314.2,
+          "p99": 475.4,
+          "max": 475.4,
+          "min": 255.2,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "4": {
+        "utterance": "That covers everything.",
+        "wall_ms": {
+          "avg": 479.2,
+          "median": 420.8,
+          "p99": 1020.3,
+          "max": 1020.3,
+          "min": 342.6,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 479.1,
+          "median": 420.6,
+          "p99": 1020.2,
+          "max": 1020.2,
+          "min": 342.4,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "5": {
+        "utterance": "Option one please.",
+        "wall_ms": {
+          "avg": 500.5,
+          "median": 470.6,
+          "p99": 670.6,
+          "max": 670.6,
+          "min": 421.1,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 500.3,
+          "median": 470.4,
+          "p99": 670.4,
+          "max": 670.4,
+          "min": 420.9,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.2,
+          "median": 0.2,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      },
+      "6": {
+        "utterance": "Yes, confirmed.",
+        "wall_ms": {
+          "avg": 740.5,
+          "median": 402.4,
+          "p99": 3456.9,
+          "max": 3456.9,
+          "min": 337.3,
+          "n": 10
+        },
+        "llm_ms": {
+          "avg": 740.4,
+          "median": 402.2,
+          "p99": 3456.8,
+          "max": 3456.8,
+          "min": 337.2,
+          "n": 10
+        },
+        "overhead_ms": {
+          "avg": 0.1,
+          "median": 0.1,
+          "p99": 0.2,
+          "max": 0.2,
+          "min": 0.1,
+          "n": 10
+        },
+        "llm_calls": {
+          "avg": 1.0,
+          "median": 1.0,
+          "p99": 1.0,
+          "max": 1.0,
+          "min": 1.0,
+          "n": 10
+        }
+      }
+    },
+    "llm_calls_by_tag": {
+      "planner": {
+        "avg": 464.4,
+        "median": 387.9,
+        "p99": 3456.8,
+        "max": 3456.8,
+        "min": 252.0,
+        "n": 60
+      }
+    }
+  }
+}
