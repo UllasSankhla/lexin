@@ -672,7 +672,21 @@
         break;
 
       case 'server.call_ended':
-        cleanup();
+        // Stop mic and WebSocket immediately, but let scheduled audio play to completion
+        // before tearing down playbackCtx. For long terminal speeches (not_qualified,
+        // farewell) all audio is already received and queued in the Web Audio API —
+        // calling cleanup() immediately would kill those scheduled sources mid-play.
+        stopAudioCapture(/* keepPlayback= */ true);
+        if (ws) { ws.onclose = null; ws.close(); ws = null; }
+        {
+          const remainingMs = (playbackCtx && nextStartTime > playbackCtx.currentTime)
+            ? (nextStartTime - playbackCtx.currentTime) * 1000
+            : 0;
+          setTimeout(() => {
+            stopAudioPlayback();
+            if (playbackCtx) { playbackCtx.close(); playbackCtx = null; }
+          }, remainingMs + 250);
+        }
         setState(STATES.DONE);
         break;
 
@@ -813,7 +827,7 @@
     return int16;
   }
 
-  function stopAudioCapture() {
+  function stopAudioCapture(keepPlayback = false) {
     stopBargeInMonitor();
     bargeInAnalyser = null;
     bargeInData = null;
@@ -824,7 +838,9 @@
     if (audioWorkletNode) { audioWorkletNode.disconnect(); audioWorkletNode = null; }
     if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
     if (audioCtx) { audioCtx.close(); audioCtx = null; }
-    if (playbackCtx) { playbackCtx.close(); playbackCtx = null; }
+    if (!keepPlayback) {
+      if (playbackCtx) { playbackCtx.close(); playbackCtx = null; }
+    }
     if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
     resetWaveform();
   }
