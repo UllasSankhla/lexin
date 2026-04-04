@@ -124,6 +124,7 @@ def build_config_export(db: Session, owner_id: str) -> dict:
             "max_call_duration_sec": assistant.max_call_duration_sec if assistant else 600,
             "silence_timeout_sec": assistant.silence_timeout_sec if assistant else 10,
             "language": assistant.language if assistant else "en-US",
+            "enable_empathy_fillers": assistant.enable_empathy_fillers if assistant else False,
         },
         "parameters": [
             {

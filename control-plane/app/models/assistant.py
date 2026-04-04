@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Integer, String, Text, DateTime, func
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -18,5 +18,6 @@ class AssistantConfig(Base):
     max_call_duration_sec: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     silence_timeout_sec: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     language: Mapped[str] = mapped_column(Text, nullable=False, default="en-US")
+    enable_empathy_fillers: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -43,3 +43,11 @@ class BaseTransport(ABC):
     @abstractmethod
     def utterance_queue(self) -> asyncio.Queue:
         """Async queue populated with user utterances as they arrive."""
+
+    @property
+    def interrupted(self) -> bool:
+        """True if the last send_response was cut short by a barge-in.
+
+        Voice transport overrides this; text transport always returns False.
+        """
+        return False

@@ -12,6 +12,7 @@ class AssistantConfigBase(BaseModel):
     max_call_duration_sec: int = Field(default=600, ge=60, le=3600)
     silence_timeout_sec: int = Field(default=10, ge=3, le=60)
     language: str = Field(default="en-US")
+    enable_empathy_fillers: bool = Field(default=False)
 
 
 class AssistantConfigCreate(AssistantConfigBase):
@@ -28,6 +29,7 @@ class AssistantConfigUpdate(BaseModel):
     max_call_duration_sec: int | None = None
     silence_timeout_sec: int | None = None
     language: str | None = None
+    enable_empathy_fillers: bool | None = None
 
 
 class AssistantConfigResponse(AssistantConfigBase):

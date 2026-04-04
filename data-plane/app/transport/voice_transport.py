@@ -129,6 +129,11 @@ class VoiceTransport(BaseTransport):
         finally:
             self._tts_playing = False
 
+    @property
+    def interrupted(self) -> bool:
+        """True if the most recent send_response was cut short by a barge-in."""
+        return self._tts_cancel.is_set()
+
     async def handle_binary_frame(self, data: bytes) -> None:
         if self._stt:
             await self._stt.send_audio(data)

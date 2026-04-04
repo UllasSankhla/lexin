@@ -35,7 +35,7 @@ Three independently deployable services:
 
 | Model | Purpose |
 |---|---|
-| `AssistantConfig` | Persona name, voice, language, system prompt |
+| `AssistantConfig` | Persona name, voice, language, system prompt, `enable_empathy_fillers` |
 | `CollectionParameter` | Fields to collect (name, type, required, hints, order) |
 | `FAQ` | Curated question/answer pairs for the FAQ agent |
 | `ContextFile` | Uploaded business documents for the ContextDocs agent |
@@ -97,8 +97,8 @@ Client                     Data Plane                    External
 
 Two transport modes behind a common `BaseTransport` interface:
 
-- **VoiceTransport** — PCM audio in (Deepgram STT) + PCM audio out (Deepgram TTS). Handles barge-in: cancels TTS stream when interim transcripts arrive while audio is playing.
-- **TextTransport** — JSON text frames in/out. Used for testing and text-mode widget integrations.
+- **VoiceTransport** — PCM audio in (Deepgram STT) + PCM audio out (Deepgram TTS). Handles barge-in: cancels TTS stream when interim transcripts arrive while audio is playing. Exposes `interrupted: bool` so the filler dispatcher can detect mid-filler barge-in.
+- **TextTransport** — JSON text frames in/out. Used for testing and text-mode widget integrations. `interrupted` always returns `False` — fillers are skipped in text mode.
 
 ### WebSocket Frame Protocol
 
@@ -219,6 +219,19 @@ Tools run at lifecycle trigger points. They do not speak to the caller.
 
 A post-processing step applied to every agent response before it reaches TTS. Strips openers like "Absolutely!" and "Of course!" that accumulate from LLM responses. Prevents the assistant from sounding formulaic across turns.
 
+### Empathy Fillers
+
+A perceived-latency reduction mechanism. When `enable_empathy_fillers` is enabled in the assistant config and a turn takes longer than **500 ms** to compute, a short generic phrase ("Sure, one moment.", "Thanks for your patience.") is streamed to TTS in parallel with the ongoing LLM work. The real response is queued immediately after the filler audio.
+
+```
+t=0ms:   _compute() starts (planner + agents)
+t=0ms:   asyncio.wait_for(shield(compute_task), timeout=0.5s)
+t=500ms: timeout → filler_1 sent to TTS
+t=~1.5s: filler_1 drains → compute done? → real response queued
+```
+
+Up to `MAX_FILLERS = 3` phrases are sent. Barge-in during a filler cancels the filler stream; the compute task is still awaited for graph state consistency but the response is discarded. Fillers never fire in text mode. See `docs/empathy-fillers.md` for full detail.
+
 ---
 
 ## LLM Integration
@@ -301,13 +314,15 @@ Self-contained embeddable JS (`booking-widget.js`), no dependencies.
         │
         ▼
 5. Each caller utterance → _process_utterance()
-   ├── planner.plan(utterance)        — intent classification (LLM)
-   ├── reset_fields steps applied     — clears fields for corrections
-   ├── invoke steps run concurrently  — agents process utterance
-   ├── WAITING_CONFIRM agent wins     — if any step triggers confirmation
-   ├── speaks assembled in intent order via combine_speaks()
-   ├── empathy_filter applied         — strips formulaic openers
-   ├── TTS stream → PCM chunks → WebSocket
+   ├── _compute() launched as asyncio.Task
+   │     ├── planner.plan(utterance)        — intent classification (LLM)
+   │     ├── reset_fields steps applied     — clears fields for corrections
+   │     ├── invoke steps run concurrently  — agents process utterance
+   │     ├── WAITING_CONFIRM agent wins     — if any step triggers confirmation
+   │     ├── speaks assembled in intent order via combine_speaks()
+   │     └── empathy_filter applied         — strips formulaic openers
+   ├── [if enable_empathy_fillers] wait 500ms — if _compute() still running, send fillers
+   ├── TTS stream → PCM chunks → WebSocket  (filler phrases first, then real response)
    ├── collected fields persisted to DB
    └── graph edges followed (→ decider | → resume | → end | → next node)
         │
@@ -333,3 +348,5 @@ Self-contained embeddable JS (`booking-widget.js`), no dependencies.
 **Tool/agent separation:** Non-conversational work (calendar fetch, summarization, webhook) is fully separated from conversational agents. Tools cannot speak, agents cannot make external API calls directly. The boundary is enforced by design.
 
 **Two STT/TTS pairs per call:** Deepgram provides both STT (nova-2, streaming) and TTS (aura-2, per-sentence). The TTS stream starts as soon as the first sentence is available — the full LLM response is not buffered before synthesis begins.
+
+**Empathy fillers mask perceived latency:** Rather than reducing actual LLM latency, the filler system attacks perceived latency — the silence window the caller experiences. A short phrase streamed at the 500 ms mark gives the caller immediate auditory feedback while the real response finishes computing. This is toggled per-assistant via `enable_empathy_fillers`.

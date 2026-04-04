@@ -37,6 +37,7 @@ from app.tools.base import ToolTrigger, ToolContext
 from app.tools.registry import resolve_tool
 from app.websocket.session import CallSession
 from app.agents.empathy_filter import apply_empathy_filter
+from app.pipeline.fillers import filler_sequence, MAX_FILLERS
 from app.websocket.state_machine import CallState
 from app.transport.base import BaseTransport
 from app.transport.voice_transport import VoiceTransport
@@ -478,7 +479,9 @@ async def handle_call(
             for t in transcript_turns
         ]
 
-        try:
+        # ── Inner coroutine: planner + agents → assembled response ───────────
+        async def _compute() -> tuple[str, str | None, list]:
+            """Run planner + agent invocations and return (speak_text, finalize_reason, invoke_steps)."""
             loop = asyncio.get_running_loop()
 
             # ── Planner: generate execution plan ─────────────────────────────
@@ -489,20 +492,20 @@ async def handle_call(
             # All invoke steps run concurrently via asyncio.gather. Results are
             # processed in speech order (planner intent order) for speak assembly.
             speaks: list[tuple[str, str, float]] = []  # (speak_text, agent_id, confidence)
-            finalize_reason = None
+            _finalize_reason = None
             agent_id = "unknown"
             waiting_confirm_speak: str | None = None
 
             # Separate reset_fields (applied immediately) from invoke steps
-            invoke_steps = []
+            _invoke_steps = []
             for step in steps:
                 if step.action == "reset_fields" and step.fields:
                     planner.reset_fields(step.fields, collected_all)
                 elif step.action == "invoke" and step.agent_id:
-                    invoke_steps.append(step)
+                    _invoke_steps.append(step)
 
-            if invoke_steps:
-                planned_agent_ids = {s.agent_id for s in invoke_steps}
+            if _invoke_steps:
+                planned_agent_ids = {s.agent_id for s in _invoke_steps}
 
                 # Push the active primary onto the resume stack once if any
                 # planned step is interrupt-eligible and the primary is not
@@ -511,7 +514,7 @@ async def handle_call(
                 if primary_id and primary_id not in planned_agent_ids:
                     if any(
                         graph.nodes.get(s.agent_id) and graph.nodes[s.agent_id].interrupt_eligible
-                        for s in invoke_steps
+                        for s in _invoke_steps
                     ):
                         planner.push_resume(primary_id)
 
@@ -524,26 +527,26 @@ async def handle_call(
                             "" if s.use_empty_utterance else caller_text,
                             current_turn, loop, call_history,
                         )
-                        for s in invoke_steps
+                        for s in _invoke_steps
                     ],
                     return_exceptions=True,
                 )
                 logger.info(
                     "Steps executed%s: %s",
-                    " (parallel)" if len(invoke_steps) > 1 else "",
-                    [s.agent_id for s in invoke_steps],
+                    " (parallel)" if len(_invoke_steps) > 1 else "",
+                    [s.agent_id for s in _invoke_steps],
                 )
 
                 # Process results in speech order (planner intent order).
                 # WAITING_CONFIRM always wins: prepend any prior speaks and stop.
                 for idx, res in enumerate(results):
-                    agent_id = invoke_steps[idx].agent_id
+                    agent_id = _invoke_steps[idx].agent_id
                     if isinstance(res, Exception):
                         logger.warning("Step %s raised: %s", agent_id, res)
                         continue
                     s_speak, s_fr, s_conf = res
-                    if s_fr is not None and finalize_reason is None:
-                        finalize_reason = s_fr
+                    if s_fr is not None and _finalize_reason is None:
+                        _finalize_reason = s_fr
                     ag_state = graph.states.get(agent_id)
                     if ag_state and ag_state.status == AgentStatus.WAITING_CONFIRM:
                         prior = planner.combine_speaks(speaks)
@@ -552,22 +555,71 @@ async def handle_call(
                     if s_speak:
                         speaks.append((s_speak, agent_id, s_conf))
 
-            consecutive_errors[0] = 0
-
             if waiting_confirm_speak is not None:
-                speak_text = waiting_confirm_speak
+                _speak_text = waiting_confirm_speak
             else:
-                speak_text = planner.combine_speaks(speaks)
+                _speak_text = planner.combine_speaks(speaks)
 
-            if not speak_text or not speak_text.strip():
+            if not _speak_text or not _speak_text.strip():
                 logger.warning("speak_text empty after full chain — using recovery phrase")
-                speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
+                _speak_text = "I'm sorry, I didn't quite get that. Could you please say that again?"
 
-            agents_ran = frozenset(s.agent_id for s in invoke_steps)
-            speak_text = apply_empathy_filter(speak_text, collected_all, transcript_turns, agents_ran)
+            agents_ran = frozenset(s.agent_id for s in _invoke_steps)
+            _speak_text = apply_empathy_filter(_speak_text, collected_all, transcript_turns, agents_ran)
 
-            session.add_assistant_turn(speak_text)
-            transcript_turns.append({"role": "assistant", "content": speak_text})
+            session.add_assistant_turn(_speak_text)
+            transcript_turns.append({"role": "assistant", "content": _speak_text})
+
+            return _speak_text, _finalize_reason, _invoke_steps
+
+        try:
+            compute_task = asyncio.create_task(_compute())
+
+            # ── Empathy filler: fire after 500 ms if still processing ─────────
+            enable_fillers = assistant_cfg.get("enable_empathy_fillers", False)
+            if enable_fillers and mode == "voice":
+                try:
+                    await asyncio.wait_for(asyncio.shield(compute_task), timeout=0.5)
+                except asyncio.TimeoutError:
+                    filler_t0 = time.monotonic()
+                    logger.info(
+                        "FILLER | turn=%d | threshold exceeded (500 ms) — starting filler loop",
+                        current_turn,
+                    )
+                    filler_count = 0
+                    for phrase in filler_sequence():
+                        if filler_count >= MAX_FILLERS:
+                            logger.info(
+                                "FILLER | turn=%d | max fillers (%d) reached — awaiting compute",
+                                current_turn, MAX_FILLERS,
+                            )
+                            break
+                        filler_id = f"filler-{seq[0]+1}-{filler_count+1}"
+                        logger.info(
+                            "FILLER | turn=%d | sending filler %d/%d | id=%s | text=%r",
+                            current_turn, filler_count + 1, MAX_FILLERS, filler_id, phrase,
+                        )
+                        await transport.send_response(phrase, filler_id)
+                        filler_count += 1
+                        if compute_task.done():
+                            logger.info(
+                                "FILLER | turn=%d | compute finished after %d filler(s) | elapsed=%.0fms",
+                                current_turn, filler_count,
+                                (time.monotonic() - filler_t0) * 1000,
+                            )
+                            break
+                        if transport.interrupted:
+                            # Barge-in mid-filler: let compute finish for graph
+                            # state consistency, then discard the response.
+                            logger.info(
+                                "FILLER | turn=%d | barge-in after %d filler(s) — discarding response",
+                                current_turn, filler_count,
+                            )
+                            await compute_task
+                            return
+
+            speak_text, finalize_reason, invoke_steps = await compute_task
+            consecutive_errors[0] = 0
 
             audio_id = f"resp-{seq[0] + 1}"
             logger.info(
