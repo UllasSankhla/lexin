@@ -58,72 +58,39 @@ INTENT TYPES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FIELD_DATA    — Caller provides one or more contact or intake data values: name, email,
                 phone, address, employer, member ID, job title, date, etc.
-                A single utterance may contain multiple field values — still one intent.
-                e.g. "My name is Sarah Chen", "It's 415-555-0192", "I work at Microsoft"
-                e.g. "Sarah Chen, sarah at gmail dot com, and my number is 415-555-0192"
-                     (three fields in one utterance → still one FIELD_DATA intent)
-                HISTORY RULE: A bare value with no label ("415-555-0192", "John Smith")
-                is FIELD_DATA if the AI's last question asked for that type of data.
+                Multiple field values in one utterance → still one FIELD_DATA intent.
 
 CONFIRMATION  — Caller responds yes/no to a pending read-back or confirmation question.
-                e.g. "Yes that's right", "No that's wrong", "Correct", "Yep"
-                HISTORY RULE: Only classify as CONFIRMATION when PENDING CONFIRMATION
-                is shown in context. Without a pending confirmation, "yes" is ambiguous
-                and should be treated as CONTINUATION or FIELD_DATA based on context.
+                Only classify as CONFIRMATION when PENDING CONFIRMATION is shown in
+                context. Without one, "yes" is CONTINUATION or FIELD_DATA.
 
 CORRECTION    — Caller explicitly corrects a previously confirmed contact field.
-                e.g. "Wait, my email is john@gmail.com not jane@gmail.com"
                 Must include "field": the exact key from COLLECTED STATE being corrected.
-                HISTORY RULE: Look at COLLECTED STATE — correction only applies to
-                fields already confirmed and shown there.
 
-NARRATIVE     — Caller describes their legal situation, matter, or circumstances for
-                the first time, or adds new facts to their story.
-                e.g. "I was in a car accident last month and I'm having neck pain"
-                e.g. "My employer is hinting at layoffs and I'm worried about my H1B"
+NARRATIVE     — Caller describes their legal situation or circumstances.
                 Rhetorical questions appended to a narrative ("can you help?",
-                "am I in the right place?", "does that make sense?") are NARRATIVE,
-                not FAQ_QUESTION.
-                HISTORY RULE: If the AI just asked "tell me more about your situation"
-                and the caller continues the story, this is NARRATIVE (or CONTINUATION
-                if they're adding to what they just said).
+                "am I in the right place?") are NARRATIVE, not FAQ_QUESTION.
 
 FAQ_QUESTION  — Caller asks a concrete standalone question about fees, process,
                 location, hours, what the firm handles, or firm policy.
-                e.g. "What are your consultation fees?", "Where are you located?"
                 NOT FAQ_QUESTION if the question is rhetorical or embedded in narrative.
-                HISTORY RULE: "How long does this take?" asked mid-data-collection is
-                FAQ_QUESTION even without narrative context.
 
-DATA_STATUS   — Caller asks a question directed specifically at the data collection
-                state: what has been collected, whether a field was captured correctly,
-                or requests a read-back of collected information.
-                e.g. "What information do you have so far?"
-                e.g. "Did you get my name right?", "Can you repeat back my email?"
-                e.g. "What fields have you collected?", "Do you have my phone number?"
-                These are NOT FAQ_QUESTION — they are questions for data_collection,
-                not the firm. Route to data_collection regardless of call stage.
+DATA_STATUS   — Caller asks about the data collection state: what has been collected,
+                whether a field was captured correctly, or requests a read-back.
+                e.g. "What information do you have so far?", "Did you get my name right?"
+                These are NOT FAQ_QUESTION — route to data_collection regardless of stage.
 
-CONTINUATION  — Caller continues or adds detail to their previous statement,
-                in direct response to the AI's last acknowledgment or prompt.
-                Use when the AI's last message invited more detail and the caller
-                is responding to that — not starting a new topic.
-                HISTORY RULE: If the last AI turn ended with "tell me more" or
-                "go ahead" and the caller continues, this is CONTINUATION.
+CONTINUATION  — Caller continues or adds detail to their previous statement in direct
+                response to the AI's last acknowledgment or prompt.
 
-FAREWELL      — Caller is unmistakably signing off the call with explicit goodbye words.
-                e.g. "Goodbye!", "Thanks, talk to you then, bye!", "Take care!"
-                NOT farewell: "Okay. Thank you.", "Sounds good", "Perfect" — these
-                are ambiguous acknowledgments that could occur mid-conversation.
+FAREWELL      — Caller is unmistakably signing off with explicit goodbye words.
+                NOT farewell: "Okay. Thank you.", "Sounds good", "Perfect".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLASSIFICATION RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. HISTORY FIRST — always read the conversation history before classifying.
-   The same words mean different things depending on what the AI last asked.
-   "Four one five" after "what's your phone number?" is FIELD_DATA.
-   "Four one five" after "tell me more about your situation" is unexpected — ask
-   yourself what the most plausible intent is given the full context.
+1. HISTORY FIRST — the same words mean different things depending on what the AI last
+   asked. Always read the conversation history before classifying.
 
 2. SPEECH ORDER — list intents in the order the caller expressed them.
    Most utterances have exactly 1 intent. Use 2 only when clearly distinct
@@ -135,16 +102,13 @@ CLASSIFICATION RULES
    If the corrected field cannot be identified with confidence, use FIELD_DATA.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLES (showing history influence)
+EXAMPLES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AI: "What is your name?"  Caller: "John Smith"
-  → [FIELD_DATA]  (direct answer to a field question)
-
-AI: "Is that correct?"  Caller: "Yes"  (pending: email)
-  → [CONFIRMATION]  (pending confirmation exists)
+AI: "Is that correct?"  Caller: "Yes"  (PENDING CONFIRMATION shown in context)
+  → [CONFIRMATION]
 
 AI: "Tell me more."  Caller: "Nothing formal yet, just hints from my manager."
-  → [CONTINUATION]  (continuing narrative in response to AI prompt)
+  → [CONTINUATION]  (continuing in response to AI prompt — not a new topic)
 
 AI: "What is your email?"  Caller: "john at gmail dot com. Also my phone is 415-555-0192."
   → [FIELD_DATA]  (two fields in one utterance — still one FIELD_DATA intent)
@@ -152,16 +116,6 @@ AI: "What is your email?"  Caller: "john at gmail dot com. Also my phone is 415-
 AI: "What brings you to us today?"
 Caller: "I was in a car accident last month. What are your fees?"
   → [NARRATIVE, FAQ_QUESTION]  (narrative first, then concrete question)
-
-AI: "What is your phone number?"  Caller: "Yes, and by the way what are your hours?"
-  → [CONFIRMATION, FAQ_QUESTION]  (pending confirmation answered, then question)
-
-AI: "What's your email address?"  Caller: "Wait — did you get my name right earlier?"
-  → [DATA_STATUS]  (question about a previously collected field → data_collection)
-
-AI: "I have your phone as 415-555-0192 — is that correct?"
-Caller: "Yes. Actually, what information do you have on me so far?"
-  → [CONFIRMATION, DATA_STATUS]  (confirms phone, then asks for status read-back)
 
 Caller: "No wait, my email is john@gmail.com not jane@gmail.com"
   (email_address in COLLECTED STATE)
@@ -173,7 +127,6 @@ RESPONSE FORMAT
 Return ONLY valid JSON. No markdown. No explanation.
 
 {
-  "thinking": "<brief reasoning using history to explain the intent order>",
   "intents": [
     {"type": "NARRATIVE", "field": null, "reason": "caller described their situation"},
     {"type": "FAQ_QUESTION", "field": null, "reason": "asked about fees"}
@@ -328,7 +281,7 @@ class Planner:
 
         try:
             result = llm_structured_call(
-                _MULTI_INTENT_SYSTEM, user_msg, MultiIntentLLMResponse, max_tokens=2048, tag="planner"
+                _MULTI_INTENT_SYSTEM, user_msg, MultiIntentLLMResponse, max_tokens=256, tag="planner"
             )
 
             steps = self._build_steps_from_intents(result.intents, available_ids)
@@ -340,9 +293,8 @@ class Planner:
             steps = self._validate_waiting_confirm(steps)
 
             logger.info(
-                "Planner | intents=%s | thinking=%r | steps=%s | utterance=%r",
+                "Planner | intents=%s | steps=%s | utterance=%r",
                 [(i.type, i.field) for i in result.intents],
-                result.thinking,
                 [(s.action, s.agent_id or s.fields) for s in steps],
                 utterance[:100],
             )

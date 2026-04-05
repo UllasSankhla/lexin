@@ -584,7 +584,9 @@ def generate_markdown(report: dict, timestamp: str, n_runs: int, model: str) -> 
                 *_tbl_header_main(),
             ]
             for tag, s in data["llm_calls_by_tag"].items():
-                lines.append(_tbl_row_main(tag, s))
+                # s may be flat stats dict (old format) or nested with latency_ms key (new format)
+                stats = s["latency_ms"] if "latency_ms" in s else s
+                lines.append(_tbl_row_main(tag, stats))
             lines.append("")
 
     return "\n".join(lines)
@@ -618,7 +620,8 @@ def print_summary(report: dict) -> None:
     for data in report.values():
         for tag, s in sorted(data["llm_calls_by_tag"].items()):
             if tag not in seen:
-                print(f"{tag:<36} {s['avg']:>7.0f}ms {s['median']:>7.0f}ms {s['max']:>7.0f}ms {s['n']:>5}")
+                stats = s["latency_ms"] if "latency_ms" in s else s
+                print(f"{tag:<36} {stats['avg']:>7.0f}ms {stats['median']:>7.0f}ms {stats['max']:>7.0f}ms {stats['n']:>5}")
                 seen.add(tag)
     print()
 

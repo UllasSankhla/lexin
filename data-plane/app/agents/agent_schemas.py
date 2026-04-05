@@ -99,5 +99,4 @@ class IntentItem(BaseModel):
 
 
 class MultiIntentLLMResponse(BaseModel):
-    thinking: str
     intents: list[IntentItem]    # ordered by speech position, max 3
