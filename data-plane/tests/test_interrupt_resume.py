@@ -260,14 +260,14 @@ class TestSchedulingAgentInterrupt:
         agent = self._make_agent()
         state = self._state_awaiting_choice()
 
-        def _choice_response(*a, **kw):
-            from app.agents.agent_schemas import SlotChoice
-            return SlotChoice(slot_index=0, confidence=0.9)
+        def _slot_action_pick(*a, **kw):
+            from app.agents.scheduling import _SlotAction
+            return _SlotAction(action="pick", slot_index=1)
 
         with patch("app.agents.scheduling.llm_structured_call", side_effect=[
             self._needs_answer_false(),  # gate
-            _choice_response(),          # choice extraction
-        ]):
+            _slot_action_pick(),         # slot action classification
+        ]), patch("app.agents.scheduling.llm_text_call", return_value="I'll book you for Monday at 10 AM. Shall I confirm?"):
             resp = agent.process("The first one please.", state, _MINIMAL_CONFIG, [])
         assert resp.status != AgentStatus.UNHANDLED
 

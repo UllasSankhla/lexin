@@ -3,17 +3,27 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from pydantic import BaseModel
 
 from app.agents.base import AgentBase, AgentStatus, SubagentResponse
 from app.agents.llm_utils import llm_structured_call, llm_text_call, ConversationHistory
-from app.agents.agent_schemas import SlotConfirmSignal, EventTypeMatch, SlotChoice, DateRangePreference
+from app.agents.agent_schemas import SlotConfirmSignal, EventTypeMatch
 from app.services.calendar_service import list_available_slots, book_time_slot
 
 
 class _NeedsAnswerSignal(BaseModel):
     needs_answer: bool
+
+
+class _SlotAction(BaseModel):
+    """Single-call intent classification for slot choice and date preference."""
+    action: str  # "pick" | "new_date" | "unclear"
+    slot_index: Optional[int] = None   # 1-based, present when action=="pick"
+    start_time: Optional[str] = None   # ISO UTC, present when action=="new_date"
+    end_time: Optional[str] = None     # ISO UTC, present when action=="new_date"
+
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +41,31 @@ _SCHEDULING_QUESTION_GATE_SYSTEM = (
     "false → 'The second one.' | 'Can we do Tuesday instead?' | "
     "'Yes, confirm that.' | 'Do you have anything earlier?' | 'That works.'\n\n"
     "Reply ONLY valid JSON: {\"needs_answer\": true} or {\"needs_answer\": false}."
+)
+
+_SLOT_ACTION_SYSTEM = (
+    "Given a list of available appointment slots and a caller's utterance, "
+    "determine what the caller wants.\n\n"
+    "Return one of:\n"
+    "  {\"action\": \"pick\", \"slot_index\": <1-based int>}\n"
+    "    — caller is selecting a specific slot from the current list\n"
+    "    — Examples: \"The second one\", \"Monday at 10\", \"I'll take option 1\", "
+    "\"That works\", \"The first one\", \"Option 2 please\"\n\n"
+    "  {\"action\": \"new_date\", \"start_time\": \"<ISO UTC>\", \"end_time\": \"<ISO UTC>\"}\n"
+    "    — caller wants to see slots on a different day or time, OR is asking whether "
+    "a specific day/time is available\n"
+    "    — Full-day range for a specific day (e.g. Thursday = 00:00–23:59 that Thursday)\n"
+    "    — 7-day window for vague week preferences (e.g. 'next week', 'later this month')\n"
+    "    — 14-day window for time-of-day preferences without a specific day "
+    "(e.g. 'afternoon', 'morning', 'earlier', 'later in the day')\n"
+    "    — Examples: \"Do you have Thursday?\", \"Any Friday morning?\", "
+    "\"What about next week?\", \"Something earlier?\", "
+    "\"Do you have anything in the afternoon?\", \"How about a different day?\"\n\n"
+    "  {\"action\": \"unclear\"}\n"
+    "    — cannot determine what the caller wants\n\n"
+    "Today's date and current slots are in the message. "
+    "Compute relative dates from today. "
+    "Reply ONLY valid JSON."
 )
 
 _SPEAK_SLOTS_SYSTEM = (
@@ -246,120 +281,135 @@ class SchedulingAgent(AgentBase):
         slots_data = internal_state.get("available_slots", [])
         llm_history = ConversationHistory.from_list(internal_state.get("llm_history"))
 
-        if slots_data:
-            # Numbered list used internally only for LLM choice identification — never spoken to caller
-            numbered = "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
-            user_msg = f"Available slots:\n{numbered}\nCaller said: \"{utterance}\""
-            try:
-                result = llm_structured_call(
-                    "Identify which slot the caller chose based on their description. "
-                    "Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
-                    user_msg,
-                    SlotChoice,
-                    history=llm_history,
-                    tag="scheduling_slot_choice",
-                )
-                slot_num = result.slot
-                if slot_num is not None:
-                    idx = int(slot_num) - 1
-                    # ── Steering: slot choice bounds guard ────────────────────
-                    bounds_issue = self._slot_choice_bounds_guard(idx, slots_data)
-                    if bounds_issue:
-                        logger.warning(
-                            "Steering[slot_choice_bounds]: %s | slot_num=%s len=%d",
-                            bounds_issue, slot_num, len(slots_data),
-                        )
-                        # Retry slot choice with corrected context
-                        numbered_retry = "\n".join(
-                            f"{i+1}. {s['description']}" for i, s in enumerate(slots_data)
-                        )
-                        correction = (
-                            f"STEERING CORRECTION: {bounds_issue} "
-                            f"Valid slot numbers are 1 to {len(slots_data)}. "
-                            f"Re-read the list and return the correct slot number.\n\n"
-                            f"Available slots:\n{numbered_retry}\nCaller said: \"{utterance}\""
-                        )
-                        try:
-                            result = llm_structured_call(
-                                "Identify which slot the caller chose based on their description. "
-                                "Return JSON: {\"slot\": <1-based int>} or {\"slot\": null}.",
-                                correction,
-                                SlotChoice,
-                                tag="scheduling_slot_choice_steered",
-                            )
-                            slot_num = result.slot
-                            idx = int(slot_num) - 1 if slot_num is not None else -1
-                        except Exception as exc:
-                            logger.warning("Steering slot choice retry failed: %s", exc)
-                            slot_num = None
-                    if slot_num is not None and 0 <= idx < len(slots_data):
-                        chosen = slots_data[idx]
-                        internal_state["chosen_slot_id"] = idx
-                        internal_state["stage"] = "awaiting_confirm"
-                        internal_state["retry_count"] = 0
-                        speak = llm_text_call(
-                            "Generate a single voice sentence confirming a chosen appointment slot and asking for final confirmation.",
-                            f"Slot: {chosen['description']}\nPattern: 'I'll book you for [slot]. Shall I confirm?'",
-                            history=llm_history,
-                            tag="scheduling_slot_confirm_speak",
-                        )
-                        llm_history.add("user", user_msg)
-                        llm_history.add("assistant", speak)
-                        internal_state["llm_history"] = llm_history.to_list()
-                        return SubagentResponse(
-                            status=AgentStatus.WAITING_CONFIRM,
-                            speak=speak,
-                            pending_confirmation={"slot": chosen["description"]},
-                            internal_state=internal_state,
-                        )
-            except Exception as exc:
-                logger.warning("SchedulingAgent slot choice failed: %s", exc)
-
-        # Check for date preference
-        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Single LLM call: classify as slot pick, new date range, or unclear.
+        # Combining slot matching and date extraction in one call avoids the
+        # two-step fragility where question-form utterances ("Do you have Thursday?")
+        # or time-of-day preferences ("afternoon") fail the standalone DateRangePreference
+        # extraction but carry a clear user intent.
+        current_date = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d")
+        numbered = (
+            "\n".join(f"{i+1}. {s['description']}" for i, s in enumerate(slots_data))
+            if slots_data else "(no slots currently loaded)"
+        )
+        user_msg = (
+            f"Today is {current_date}.\n"
+            f"Available slots:\n{numbered}\n"
+            f"Caller said: \"{utterance}\""
+        )
         try:
-            pref = llm_structured_call(
-                "Convert a natural language time preference to a UTC date range. "
-                "Return JSON: {\"start_time\": \"ISO\", \"end_time\": \"ISO\"} or {\"found\": false}.",
-                f"Today is {current_date}. Caller said: \"{utterance}\"",
-                DateRangePreference,
-                tag="scheduling_date_pref",
+            action = llm_structured_call(
+                _SLOT_ACTION_SYSTEM,
+                user_msg,
+                _SlotAction,
+                max_tokens=128,
+                history=llm_history,
+                tag="scheduling_slot_action",
             )
-            if pref.start_time and pref.end_time:
-                from datetime import datetime as dt
-                s = dt.fromisoformat(pref.start_time.replace("Z", "+00:00"))
-                e = dt.fromisoformat(pref.end_time.replace("Z", "+00:00"))
-                collected = config.get("_collected", {})
-                purpose = collected.get("purpose") or collected.get("reason") or "appointment"
-                matched_uri = internal_state.get("matched_event_type_uri")
-                new_slots = list_available_slots(purpose, config, matched_uri, search_start=s, search_end=e)
-                internal_state["available_slots"] = [
-                    {
-                        "slot_id": sl.slot_id,
-                        "description": sl.description,
-                        "start_time": sl.start.isoformat() if sl.start else "",
-                        "end_time": sl.end.isoformat() if sl.end else "",
-                        "event_type_uri": sl.event_type_uri,
-                    }
-                    for sl in new_slots
-                ]
-                internal_state["retry_count"] = 0
-                if not new_slots:
+            logger.debug(
+                "SchedulingAgent: slot_action=%s slot_index=%s for %r",
+                action.action, action.slot_index, utterance[:60],
+            )
+
+            # ── Pick: caller selected a slot from the current list ────────────
+            if action.action == "pick" and action.slot_index is not None and slots_data:
+                idx = int(action.slot_index) - 1
+                # ── Steering: slot choice bounds guard ────────────────────────
+                bounds_issue = self._slot_choice_bounds_guard(idx, slots_data)
+                if bounds_issue:
+                    logger.warning(
+                        "Steering[slot_choice_bounds]: %s | slot_index=%s len=%d",
+                        bounds_issue, action.slot_index, len(slots_data),
+                    )
+                    # Retry with explicit correction context
+                    correction_msg = (
+                        f"STEERING CORRECTION: {bounds_issue} "
+                        f"Valid slot numbers are 1 to {len(slots_data)}. "
+                        f"Re-read the list and return the correct slot number.\n\n"
+                        + user_msg
+                    )
+                    try:
+                        action = llm_structured_call(
+                            _SLOT_ACTION_SYSTEM,
+                            correction_msg,
+                            _SlotAction,
+                            max_tokens=128,
+                            tag="scheduling_slot_action_steered",
+                        )
+                        idx = int(action.slot_index) - 1 if action.slot_index is not None else -1
+                    except Exception as exc:
+                        logger.warning("Steering slot action retry failed: %s", exc)
+                        action = _SlotAction(action="unclear")
+                        idx = -1
+
+                if action.action == "pick" and action.slot_index is not None and 0 <= idx < len(slots_data):
+                    chosen = slots_data[idx]
+                    internal_state["chosen_slot_id"] = idx
+                    internal_state["stage"] = "awaiting_confirm"
+                    internal_state["retry_count"] = 0
+                    speak = llm_text_call(
+                        "Generate a single voice sentence confirming a chosen appointment slot "
+                        "and asking for final confirmation.",
+                        f"Slot: {chosen['description']}\nPattern: 'I'll book you for [slot]. Shall I confirm?'",
+                        history=llm_history,
+                        tag="scheduling_slot_confirm_speak",
+                    )
+                    llm_history.add("user", user_msg)
+                    llm_history.add("assistant", speak)
+                    internal_state["llm_history"] = llm_history.to_list()
                     return SubagentResponse(
-                        status=AgentStatus.IN_PROGRESS,
-                        speak="I'm sorry, I don't see any openings in that time range. Would you like to try a different time?",
+                        status=AgentStatus.WAITING_CONFIRM,
+                        speak=speak,
+                        pending_confirmation={"slot": chosen["description"]},
                         internal_state=internal_state,
                     )
-                speak = self._speak_slots(new_slots)
-                return SubagentResponse(
-                    status=AgentStatus.IN_PROGRESS,
-                    speak=speak,
-                    internal_state=internal_state,
-                )
-        except Exception as exc:
-            logger.warning("SchedulingAgent date preference failed: %s", exc)
 
-        # Retry
+            # ── New date: caller wants a different day or time ────────────────
+            if action.action == "new_date" and action.start_time and action.end_time:
+                try:
+                    s = datetime.fromisoformat(action.start_time.replace("Z", "+00:00"))
+                    e = datetime.fromisoformat(action.end_time.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    logger.warning("SchedulingAgent: bad date range from LLM: %s — %s", action, exc)
+                else:
+                    collected = config.get("_collected", {})
+                    purpose = collected.get("purpose") or collected.get("reason") or "appointment"
+                    matched_uri = internal_state.get("matched_event_type_uri")
+                    new_slots = list_available_slots(purpose, config, matched_uri, search_start=s, search_end=e)
+                    internal_state["available_slots"] = [
+                        {
+                            "slot_id": sl.slot_id,
+                            "description": sl.description,
+                            "start_time": sl.start.isoformat() if sl.start else "",
+                            "end_time": sl.end.isoformat() if sl.end else "",
+                            "event_type_uri": sl.event_type_uri,
+                        }
+                        for sl in new_slots
+                    ]
+                    internal_state["retry_count"] = 0
+                    if not new_slots:
+                        speak = (
+                            "I'm sorry, I don't see any openings in that time range. "
+                            "Would you like to try a different day?"
+                        )
+                        return SubagentResponse(
+                            status=AgentStatus.IN_PROGRESS,
+                            speak=speak,
+                            internal_state=internal_state,
+                        )
+                    speak = self._speak_slots(new_slots)
+                    llm_history.add("user", user_msg)
+                    llm_history.add("assistant", speak)
+                    internal_state["llm_history"] = llm_history.to_list()
+                    return SubagentResponse(
+                        status=AgentStatus.IN_PROGRESS,
+                        speak=speak,
+                        internal_state=internal_state,
+                    )
+
+        except Exception as exc:
+            logger.warning("SchedulingAgent slot action LLM failed: %s", exc)
+
+        # ── Retry / fallback ──────────────────────────────────────────────────
         retry = internal_state.get("retry_count", 0) + 1
         internal_state["retry_count"] = retry
         if retry >= self.MAX_RETRIES and slots_data:

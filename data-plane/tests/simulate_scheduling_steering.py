@@ -113,25 +113,25 @@ class TestSlotChoiceBoundsGuard:
             "llm_history": [],
         }
 
-        # First SlotChoice call returns slot=5 (out of bounds for 3 slots)
-        # Second call (steered retry) returns slot=1 (valid)
+        # First _SlotAction call returns out-of-bounds slot_index=5 (3 slots exist)
+        # Second call (steered retry) returns slot_index=1 (valid)
         call_count = {"n": 0}
         original_llm = __import__(
             "app.agents.llm_utils", fromlist=["llm_structured_call"]
         ).llm_structured_call
 
         def fake_llm(system, user_msg, model, **kwargs):
-            from app.agents.agent_schemas import SlotChoice, DateRangePreference
-            if model is SlotChoice:
+            from app.agents.scheduling import _SlotAction, _NeedsAnswerSignal
+            if model is _SlotAction:
                 call_count["n"] += 1
                 if call_count["n"] == 1:
-                    # First call: out of bounds
-                    return SlotChoice(slot=5)
+                    # First call: out of bounds index
+                    return _SlotAction(action="pick", slot_index=5)
                 else:
                     # Steered retry: valid slot
-                    return SlotChoice(slot=1)
-            if model is DateRangePreference:
-                return DateRangePreference(found=False)
+                    return _SlotAction(action="pick", slot_index=1)
+            if model is _NeedsAnswerSignal:
+                return _NeedsAnswerSignal(needs_answer=False)
             return original_llm(system, user_msg, model, **kwargs)
 
         with patch("app.agents.scheduling.llm_structured_call", side_effect=fake_llm), \
@@ -140,7 +140,7 @@ class TestSlotChoiceBoundsGuard:
             resp = agent.process("The first one", state, CONFIG, [])
 
         print(f"\n  Recovery response: {resp.speak!r}  status={resp.status.value}")
-        print(f"  SlotChoice calls made: {call_count['n']}")
+        print(f"  _SlotAction calls made: {call_count['n']}")
 
         # Agent should not crash and should have moved to awaiting_confirm
         # OR re-presented slots if steered retry also failed
