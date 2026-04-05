@@ -301,7 +301,7 @@ class SchedulingAgent(AgentBase):
                 _SLOT_ACTION_SYSTEM,
                 user_msg,
                 _SlotAction,
-                max_tokens=256,
+                max_tokens=384,
                 history=llm_history,
                 tag="scheduling_slot_action",
             )
@@ -332,7 +332,7 @@ class SchedulingAgent(AgentBase):
                             _SLOT_ACTION_SYSTEM,
                             correction_msg,
                             _SlotAction,
-                            max_tokens=256,
+                            max_tokens=384,
                             tag="scheduling_slot_action_steered",
                         )
                         idx = int(action.slot_index) - 1 if action.slot_index is not None else -1
@@ -601,7 +601,7 @@ class SchedulingAgent(AgentBase):
                 _SCHEDULING_QUESTION_GATE_SYSTEM,
                 f"Caller said: \"{utterance}\"",
                 _NeedsAnswerSignal,
-                max_tokens=64,
+                max_tokens=128,
                 tag="scheduling_question_gate",
             )
             logger.debug(
