@@ -247,7 +247,7 @@ class NarrativeCollectionAgent(AgentBase):
                 _QUESTION_GATE_SYSTEM,
                 f"Caller said: \"{utterance}\"",
                 _NeedsAnswerSignal,
-                max_tokens=64,
+                max_tokens=128,
                 history=history,
                 tag="narrative_question_gate",
             )

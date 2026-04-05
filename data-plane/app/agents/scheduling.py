@@ -54,7 +54,8 @@ _SLOT_ACTION_SYSTEM = (
     "  {\"action\": \"new_date\", \"start_time\": \"<ISO UTC>\", \"end_time\": \"<ISO UTC>\"}\n"
     "    — caller wants to see slots on a different day or time, OR is asking whether "
     "a specific day/time is available\n"
-    "    — Full-day range for a specific day (e.g. Thursday = 00:00–23:59 that Thursday)\n"
+    "    — Full-day range for a specific named day: start_time = 00:00 that day, end_time = 23:59 that day\n"
+    "      (e.g. 'next Thursday' → start=2026-04-16T00:00:00Z end=2026-04-16T23:59:59Z)\n"
     "    — 7-day window for vague week preferences (e.g. 'next week', 'later this month')\n"
     "    — 14-day window for time-of-day preferences without a specific day "
     "(e.g. 'afternoon', 'morning', 'earlier', 'later in the day')\n"
@@ -100,7 +101,7 @@ def _detect_confirmation(utterance: str, slot_desc: str = "") -> str:
     context = f'Slot offered: "{slot_desc}"\n' if slot_desc else ""
     user_msg = f'{context}Caller said: "{utterance}"'
     try:
-        result = llm_structured_call(_CONFIRM_INTENT_SYSTEM, user_msg, SlotConfirmSignal, max_tokens=64, tag="scheduling_confirm_intent")
+        result = llm_structured_call(_CONFIRM_INTENT_SYSTEM, user_msg, SlotConfirmSignal, max_tokens=128, tag="scheduling_confirm_intent")
         logger.debug("SchedulingAgent: confirm_intent=%r for %r", result.intent, utterance[:60])
         return result.intent
     except Exception as exc:
@@ -311,7 +312,7 @@ class SchedulingAgent(AgentBase):
                 _SLOT_ACTION_SYSTEM,
                 user_msg,
                 _SlotAction,
-                max_tokens=384,
+                max_tokens=1024,
                 history=llm_history,
                 tag="scheduling_slot_action",
             )
@@ -342,7 +343,7 @@ class SchedulingAgent(AgentBase):
                             _SLOT_ACTION_SYSTEM,
                             correction_msg,
                             _SlotAction,
-                            max_tokens=384,
+                            max_tokens=1024,
                             tag="scheduling_slot_action_steered",
                         )
                         idx = int(action.slot_index) - 1 if action.slot_index is not None else -1
