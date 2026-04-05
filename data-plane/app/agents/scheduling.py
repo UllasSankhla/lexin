@@ -205,7 +205,17 @@ class SchedulingAgent(AgentBase):
         prefetched = config.get("_tool_results", {}).get("prefetched_slots")
         if prefetched is not None:
             slots = prefetched
-            internal_state["matched_event_type_uri"] = None
+            # Preserve event_type_uri from the prefetched slots so subsequent
+            # date-change Calendly calls in _handle_choice don't have to
+            # re-discover it. Without this, matched_event_type_uri=None causes
+            # _discover_event_type_uri to be called on every post-rejection fetch,
+            # which can fail and fall back to dummy slots.
+            first = slots[0] if slots else None
+            if first is not None:
+                uri = first.event_type_uri if hasattr(first, "event_type_uri") else first.get("event_type_uri")
+            else:
+                uri = None
+            internal_state["matched_event_type_uri"] = uri or None
         else:
             # Pull collected data from graph state via config passthrough
             # (the handler injects collected params into config["_collected"])
