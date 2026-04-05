@@ -301,7 +301,7 @@ class SchedulingAgent(AgentBase):
                 _SLOT_ACTION_SYSTEM,
                 user_msg,
                 _SlotAction,
-                max_tokens=128,
+                max_tokens=256,
                 history=llm_history,
                 tag="scheduling_slot_action",
             )
@@ -332,7 +332,7 @@ class SchedulingAgent(AgentBase):
                             _SLOT_ACTION_SYSTEM,
                             correction_msg,
                             _SlotAction,
-                            max_tokens=128,
+                            max_tokens=256,
                             tag="scheduling_slot_action_steered",
                         )
                         idx = int(action.slot_index) - 1 if action.slot_index is not None else -1
